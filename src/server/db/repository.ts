@@ -27,6 +27,16 @@ import {
 import { formatBytes } from '@/lib/utils';
 import crypto from 'crypto';
 
+export interface StoredGoogleCredentials {
+  encryptedAccessToken: string;
+  encryptedRefreshToken?: string;
+  expiresAt: number;
+  email: string;
+  channelId?: string;
+  channelTitle?: string;
+  updatedAt: string;
+}
+
 class DataStore {
   profiles: MonitoredProfile[] = createInitialMonitoredProfiles();
   accounts: InstagramAccount[] = createInitialMockAccounts();
@@ -34,6 +44,7 @@ class DataStore {
   uploadJobs: UploadJob[] = createInitialUploadJobs();
   activityLogs: ActivityLog[] = createInitialActivityLogs();
   integrations: IntegrationStatus = createInitialIntegrations();
+  googleCredentials: StoredGoogleCredentials | null = null;
 
   reset() {
     this.profiles = createInitialMonitoredProfiles();
@@ -42,6 +53,7 @@ class DataStore {
     this.uploadJobs = createInitialUploadJobs();
     this.activityLogs = createInitialActivityLogs();
     this.integrations = createInitialIntegrations();
+    this.googleCredentials = null;
   }
 }
 
@@ -459,6 +471,17 @@ export class Repository {
     return newJob;
   }
 
+  static async updateUploadJob(
+    id: string,
+    updates: Partial<UploadJob>
+  ): Promise<UploadJob | null> {
+    const job = await this.getUploadJobById(id);
+    if (!job) return null;
+
+    Object.assign(job, updates, { updated_at: new Date().toISOString() });
+    return job;
+  }
+
   // ==========================================
   // Activity Logs
   // ==========================================
@@ -503,6 +526,32 @@ export class Repository {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     store.integrations[service] = { ...store.integrations[service], ...(data as any) };
     return store.integrations;
+  }
+
+  static async saveGoogleCredentials(creds: StoredGoogleCredentials): Promise<void> {
+    store.googleCredentials = creds;
+    store.integrations.google_drive.connected = true;
+    store.integrations.google_drive.email = creds.email;
+    if (creds.channelTitle) {
+      store.integrations.youtube.connected = true;
+      store.integrations.youtube.channel_title = creds.channelTitle;
+      if (creds.channelId) {
+        store.integrations.youtube.channel_id = creds.channelId;
+      }
+    }
+  }
+
+  static async getGoogleCredentials(): Promise<StoredGoogleCredentials | null> {
+    return store.googleCredentials;
+  }
+
+  static async clearGoogleCredentials(): Promise<void> {
+    store.googleCredentials = null;
+    store.integrations.google_drive.connected = false;
+    store.integrations.google_drive.email = 'Not connected';
+    store.integrations.youtube.connected = false;
+    store.integrations.youtube.channel_title = 'Not connected';
+    store.integrations.youtube.channel_id = 'None';
   }
 
   // ==========================================

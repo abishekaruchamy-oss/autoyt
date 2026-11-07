@@ -1,4 +1,5 @@
 import assert from 'assert';
+import http from 'http';
 import { encryptToken, decryptToken, maskToken } from '../src/lib/crypto';
 import { Repository } from '../src/server/db/repository';
 import { formatBytes, getTokenExpiryInfo, formatRelativeTime } from '../src/lib/utils';
@@ -6,8 +7,19 @@ import {
   normalizeProfileUrl,
   formatCaptionForYouTube,
   StandardPublicWebAdapter,
+  PermittedSandboxAdapter,
   ReelDeduplicationStore,
 } from '../src/server/monitoring/adapter';
+import {
+  getGoogleAuthUrl,
+  saveGoogleCredentials,
+  getValidAccessToken,
+  isGoogleConnected,
+  disconnectGoogle,
+} from '../src/server/services/googleAuthService';
+import { GoogleDriveService } from '../src/server/services/googleDriveService';
+import { YouTubeService } from '../src/server/services/youtubeService';
+import { PipelineService } from '../src/server/services/pipelineService';
 
 async function runTests() {
   console.log('====================================================');
@@ -151,8 +163,129 @@ Tag a developer friend! #tech #developer #coding #productivity`;
   assert.strictEqual(formatBytes(52428800), '50 MB');
   console.log('✓ Utilities test passed');
 
+  // Test 9: Google OAuth Authorization URL and Encrypted Credentials Management
+  console.log('\n[Test 9] Testing Google OAuth Flow & Encrypted Token Storage...');
+  process.env.GOOGLE_CLIENT_ID = 'test-client-id-12345.apps.googleusercontent.com';
+  process.env.GOOGLE_CLIENT_SECRET = 'test-client-secret-abcde';
+
+  const { url: authUrl, state } = getGoogleAuthUrl('http://localhost:3000/api/auth/google/callback');
+  assert.ok(authUrl.startsWith('https://accounts.google.com/o/oauth2/v2/auth'), 'Auth URL must point to Google OAuth endpoint');
+  assert.ok(authUrl.includes('drive.file'), 'Auth URL must request drive.file scope');
+  assert.ok(authUrl.includes('youtube.upload'), 'Auth URL must request youtube.upload scope');
+  assert.ok(authUrl.includes('access_type=offline'), 'Must request offline access for refresh token');
+  assert.ok(authUrl.includes(`state=${state}`), 'Must include CSRF state parameter');
+  console.log('✓ Google OAuth authorization URL properly formed with Drive & YouTube scopes');
+
+  // Test Credential storage & freshness
+  const mockTokens = {
+    access_token: 'ya29.test_google_access_token_99999',
+    refresh_token: '1//04test_google_refresh_token_88888',
+    expires_in: 3600,
+    token_type: 'Bearer',
+    scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/youtube.upload',
+    obtained_at: Date.now(),
+  };
+
+  await Repository.saveGoogleCredentials({
+    encryptedAccessToken: encryptToken(mockTokens.access_token),
+    encryptedRefreshToken: encryptToken(mockTokens.refresh_token),
+    expiresAt: Date.now() + 3600 * 1000,
+    email: 'autoshorts.creator@gmail.com',
+    channelId: 'UC_TestShortsChannel123',
+    channelTitle: 'AutoShorts Channel',
+    updatedAt: new Date().toISOString(),
+  });
+
+  const isConn = await isGoogleConnected();
+  assert.strictEqual(isConn, true, 'isGoogleConnected must return true');
+
+  const validToken = await getValidAccessToken();
+  assert.strictEqual(validToken, mockTokens.access_token, 'Retrieved valid token must match original decrypted token');
+
+  // Test disconnect
+  await disconnectGoogle();
+  const isConnAfterDisconnect = await isGoogleConnected();
+  assert.strictEqual(isConnAfterDisconnect, false, 'isGoogleConnected must return false after disconnect');
+  console.log('✓ Google encrypted credential storage, retrieval, and disconnect verified');
+
+  // Test 10: Google Drive Resumable Chunk Streaming
+  console.log('\n[Test 10] Testing Google Drive Resumable Chunk Streaming...');
+  let receivedRanges: string[] = [];
+  const mockDriveServer = http.createServer((req, res) => {
+    if (req.method === 'PUT') {
+      const range = req.headers['content-range'] as string;
+      receivedRanges.push(range);
+
+      if (range.startsWith('bytes 0-5242879/')) {
+        // First chunk accepted, incomplete (308)
+        res.writeHead(308, { Range: 'bytes=0-5242879' });
+        res.end();
+      } else {
+        // Final chunk complete (200)
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id: 'drive_file_abc_123', name: 'reel_video.mp4' }));
+      }
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+
+  await new Promise<void>((resolve) => mockDriveServer.listen(0, '127.0.0.1', () => resolve()));
+  const drivePort = (mockDriveServer.address() as any).port;
+  const sessionUrl = `http://127.0.0.1:${drivePort}/upload-session`;
+
+  const totalSize = 7 * 1024 * 1024; // 7 MB
+  const chunk1 = new Uint8Array(5 * 1024 * 1024); // 5 MB
+  const chunk2 = new Uint8Array(2 * 1024 * 1024); // 2 MB
+
+  const res1 = await GoogleDriveService.uploadStreamChunk(sessionUrl, chunk1, 0, totalSize);
+  assert.strictEqual(res1, null, 'Incomplete chunk upload must return null (status 308)');
+
+  const res2 = await GoogleDriveService.uploadStreamChunk(sessionUrl, chunk2, 5 * 1024 * 1024, totalSize);
+  assert.ok(res2, 'Completed chunk upload must return file metadata');
+  assert.strictEqual(res2?.fileId, 'drive_file_abc_123', 'Returned file ID must match Drive payload');
+  assert.strictEqual(receivedRanges[0], 'bytes 0-5242879/7340032', 'Range header must match 5MB chunk');
+  assert.strictEqual(receivedRanges[1], 'bytes 5242880-7340031/7340032', 'Range header must match second chunk');
+
+  mockDriveServer.close();
+  console.log('✓ Google Drive 5MB resumable chunked upload protocol verified');
+
+  // Test 11: Pipeline Orchestrator Concurrency & Ingestion
+  console.log('\n[Test 11] Testing Pipeline Orchestrator (runSync)...');
+  Repository.resetDemo();
+  const syncResult = await PipelineService.runSync({
+    force: true,
+    sandbox: true, // Use PermittedSandboxAdapter to test end-to-end ingestion
+  });
+
+  assert.strictEqual(syncResult.success, true, 'runSync must succeed');
+  assert.ok(syncResult.profilesChecked >= 1, 'Should check at least 1 profile');
+  assert.ok(syncResult.reelsDetected >= 1, 'Should detect reels in sandbox mode');
+  assert.ok(syncResult.jobsProcessed >= 1, 'Should create upload jobs for detected reels');
+
+  const jobs = await Repository.getUploadJobs();
+  const detectedJobs = jobs.filter((j) => j.status === 'DETECTED' || j.status === 'COMPLETED');
+  assert.ok(detectedJobs.length > 0, 'New jobs must be present in upload jobs table');
+  console.log(`✓ Pipeline runSync: ${syncResult.profilesChecked} profile(s) checked, ${syncResult.reelsDetected} reel(s) detected, ${syncResult.jobsProcessed} job(s) created`);
+
+  // Test 12: Pipeline Deduplication on Subsequent Sync Run
+  console.log('\n[Test 12] Testing Pipeline Deduplication on Subsequent Run...');
+  const secondSync = await PipelineService.runSync({
+    force: true,
+    sandbox: true,
+  });
+
+  assert.strictEqual(secondSync.success, true, 'Second run must succeed');
+  assert.strictEqual(secondSync.jobsProcessed, 0, 'Second run must process 0 jobs because of deduplication');
+  assert.ok(
+    secondSync.details.some((d) => d.includes('Skipping already-seen Reel')),
+    'Second run details must record deduplication skips'
+  );
+  console.log('✓ Pipeline deduplication verified: Zero duplicate jobs created on identical media');
+
   console.log('\n====================================================');
-  console.log('ALL 8 TEST SUITES PASSED CLEANLY (100% OK)');
+  console.log('ALL 12 TEST SUITES PASSED CLEANLY (100% OK)');
   console.log('====================================================\n');
 }
 
@@ -160,3 +293,4 @@ runTests().catch((err) => {
   console.error('Test suite failed:', err);
   process.exit(1);
 });
+

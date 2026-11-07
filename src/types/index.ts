@@ -225,5 +225,5 @@ export interface ReelsDiscoveryResult {
 export interface IMonitoringAdapter {
   readonly name: string;
   checkProfile(profileUrl: string): Promise<ProfileCheckResult>;
-  discoverReels(profile: MonitoredProfile, since?: string): Promise<ReelsDiscoveryResult>;
+  discoverReels(profile: MonitoredProfile, since?: string | null): Promise<ReelsDiscoveryResult>;
 }

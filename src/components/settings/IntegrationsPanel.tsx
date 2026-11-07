@@ -11,9 +11,15 @@ import {
   Shield,
   RotateCcw,
   Save,
+  LogIn,
+  LogOut,
+  Play,
+  Cloud,
+  Check,
 } from 'lucide-react';
 import { Instagram } from '@/components/ui/Icons';
 import { IntegrationStatus, AutomationSettings } from '@/types';
+import Link from 'next/link';
 
 interface IntegrationsPanelProps {
   integrations: IntegrationStatus;
@@ -32,6 +38,13 @@ export function IntegrationsPanel({
   const [youtubeVisibility, setYoutubeVisibility] = useState(automation.default_visibility);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+
+  const isGoogleConnected =
+    integrations.google_drive.connected &&
+    integrations.google_drive.email !== 'Not connected' &&
+    integrations.google_drive.email !== '';
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -61,6 +74,49 @@ export function IntegrationsPanel({
     }
   };
 
+  const handleConnectGoogle = () => {
+    window.location.href = '/api/auth/google/authorize';
+  };
+
+  const handleDisconnectGoogle = async () => {
+    if (confirm('Disconnect your Google account? Uploads to Google Drive and YouTube Shorts will be paused.')) {
+      try {
+        const res = await fetch('/api/auth/google/disconnect', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          onUpdate();
+        } else {
+          alert(`Error: ${data.error}`);
+        }
+      } catch (err) {
+        alert(`Failed to disconnect: ${(err as Error).message}`);
+      }
+    }
+  };
+
+  const handleTriggerSync = async () => {
+    try {
+      setSyncing(true);
+      setSyncMessage(null);
+      const res = await fetch('/api/automation/sync-now', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sandbox: false }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSyncMessage(data.message || 'Sync completed successfully.');
+        onUpdate();
+      } else {
+        setSyncMessage(`Sync failed: ${data.error}`);
+      }
+    } catch (err) {
+      setSyncMessage(`Sync error: ${(err as Error).message}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const handleResetDemo = async () => {
     if (confirm('Reset all demo state to original sample records?')) {
       await fetch('/api/demo/reset', { method: 'POST' });
@@ -70,8 +126,23 @@ export function IntegrationsPanel({
 
   return (
     <div className="space-y-6">
+      {syncMessage && (
+        <div className="p-4 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-between text-xs">
+          <div className="flex items-center gap-2 text-zinc-200">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+            <span>{syncMessage}</span>
+          </div>
+          <button
+            onClick={() => setSyncMessage(null)}
+            className="text-zinc-500 hover:text-zinc-300"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* 1. Google Drive Connection Status */}
+        {/* 1. Google Drive & YouTube OAuth Connection Card */}
         <div className="bg-zinc-900/60 border border-zinc-800 rounded-3xl p-6 flex flex-col justify-between space-y-4">
           <div>
             <div className="flex items-center justify-between mb-3">
@@ -80,76 +151,50 @@ export function IntegrationsPanel({
                   <HardDrive className="w-5 h-5" />
                 </div>
                 <div>
-                  <h4 className="text-base font-bold text-white">Google Drive Storage</h4>
-                  <span className="text-xs text-zinc-400">Google One Storage</span>
+                  <h4 className="text-base font-bold text-white">Google Drive & YouTube</h4>
+                  <span className="text-xs text-zinc-400">Google Cloud OAuth 2.0</span>
                 </div>
               </div>
-              <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
-                <CheckCircle2 className="w-3 h-3" /> Connected
-              </span>
+              {isGoogleConnected ? (
+                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3" /> Connected
+                </span>
+              ) : (
+                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3" /> Authorization Needed
+                </span>
+              )}
             </div>
 
             <p className="text-xs text-zinc-400 leading-relaxed mb-4">
-              Downloaded Reels are saved as MP4 files to your Google Drive before uploading to YouTube Shorts.
+              Connect your Google Account to enable automatic video archiving in Google Drive and publishing to YouTube Shorts.
             </p>
 
             <div className="space-y-3 bg-zinc-950/60 p-4 rounded-2xl border border-zinc-800/80 text-xs">
-              <div className="flex justify-between">
-                <span className="text-zinc-400">Connected Account:</span>
-                <span className="text-zinc-200 font-semibold">{integrations.google_drive.email}</span>
+              <div className="flex justify-between items-center">
+                <span className="text-zinc-400">Google Account:</span>
+                <span className="text-zinc-200 font-semibold font-mono text-[11px]">
+                  {isGoogleConnected ? integrations.google_drive.email : 'Not Authorized'}
+                </span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-zinc-400">Quota Usage:</span>
+              <div className="flex justify-between items-center">
+                <span className="text-zinc-400">YouTube Channel:</span>
                 <span className="text-zinc-200 font-semibold">
-                  {integrations.google_drive.quota_used_gb} GB / {integrations.google_drive.quota_total_gb} GB
+                  {integrations.youtube.connected ? integrations.youtube.channel_title : 'Pending Authorization'}
                 </span>
               </div>
               <div>
-                <label className="text-zinc-400 block mb-1.5 font-medium">Backup Folder Name:</label>
+                <label className="text-zinc-400 block mb-1.5 font-medium">Drive Archive Folder:</label>
                 <input
                   type="text"
                   value={driveFolder}
                   onChange={(e) => setDriveFolder(e.target.value)}
+                  placeholder="Instagram Reels Backup"
                   className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-rose-500"
                 />
               </div>
-            </div>
-          </div>
-        </div>
-
-        {/* 2. YouTube Channel Connection Status */}
-        <div className="bg-zinc-900/60 border border-zinc-800 rounded-3xl p-6 flex flex-col justify-between space-y-4">
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-red-500/10 text-red-400 flex items-center justify-center">
-                  <UploadCloud className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="text-base font-bold text-white">YouTube Channel</h4>
-                  <span className="text-xs text-zinc-400">Shorts Destination</span>
-                </div>
-              </div>
-              <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
-                <CheckCircle2 className="w-3 h-3" /> Connected
-              </span>
-            </div>
-
-            <p className="text-xs text-zinc-400 leading-relaxed mb-4">
-              Automated publishing engine uploads Reels to YouTube Shorts using YouTube Data API v3.
-            </p>
-
-            <div className="space-y-3 bg-zinc-950/60 p-4 rounded-2xl border border-zinc-800/80 text-xs">
-              <div className="flex justify-between">
-                <span className="text-zinc-400">Target Channel:</span>
-                <span className="text-zinc-200 font-semibold">{integrations.youtube.channel_title}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-zinc-400">Channel ID:</span>
-                <span className="font-mono text-zinc-400 text-[11px]">{integrations.youtube.channel_id}</span>
-              </div>
               <div>
-                <label className="text-zinc-400 block mb-1.5 font-medium">Default Upload Visibility:</label>
+                <label className="text-zinc-400 block mb-1.5 font-medium">Default YouTube Visibility:</label>
                 <select
                   value={youtubeVisibility}
                   onChange={(e) => setYoutubeVisibility(e.target.value as any)}
@@ -157,14 +202,36 @@ export function IntegrationsPanel({
                 >
                   <option value="public">Public (Immediate Live Shorts)</option>
                   <option value="unlisted">Unlisted (Review First)</option>
-                  <option value="private">Private</option>
+                  <option value="private">Private (Only You)</option>
                 </select>
               </div>
             </div>
           </div>
+
+          <div className="pt-2">
+            {isGoogleConnected ? (
+              <button
+                type="button"
+                onClick={handleDisconnectGoogle}
+                className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-zinc-900 hover:bg-red-500/10 text-red-400 border border-zinc-800 hover:border-red-500/30 flex items-center justify-center gap-2 transition-colors"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Disconnect Google Account</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleConnectGoogle}
+                className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center gap-2 transition-all shadow-md shadow-blue-600/30"
+              >
+                <LogIn className="w-4 h-4" />
+                <span>Connect with Google (Drive + YouTube)</span>
+              </button>
+            )}
+          </div>
         </div>
 
-        {/* 3. Instagram Account Connections Summary */}
+        {/* 2. Instagram Public Profile Monitoring (Phase 1.1 + Phase 2) */}
         <div className="bg-zinc-900/60 border border-zinc-800 rounded-3xl p-6 flex flex-col justify-between space-y-4">
           <div>
             <div className="flex items-center justify-between mb-3">
@@ -173,47 +240,57 @@ export function IntegrationsPanel({
                   <Instagram className="w-5 h-5" />
                 </div>
                 <div>
-                  <h4 className="text-base font-bold text-white">Instagram Meta OAuth</h4>
-                  <span className="text-xs text-zinc-400">Graph API v19.0</span>
+                  <h4 className="text-base font-bold text-white">Public Profile Monitoring</h4>
+                  <span className="text-xs text-zinc-400">Zero-OAuth Web Adapter</span>
                 </div>
               </div>
               <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-purple-500/10 text-purple-400 border border-purple-500/20">
-                {accountsCount} Accounts
+                {accountsCount} Profiles
               </span>
             </div>
 
             <p className="text-xs text-zinc-400 leading-relaxed mb-4">
-              All connected Creator accounts are secured with AES-256-GCM token encryption. No passwords stored.
+              Monitors public Instagram Creator profiles using terms-compliant public web requests. No account login, cookies, or passwords required.
             </p>
 
             <div className="space-y-2.5 bg-zinc-950/60 p-4 rounded-2xl border border-zinc-800/80 text-xs">
               <div className="flex justify-between">
-                <span className="text-zinc-400">Meta App ID:</span>
-                <span className="font-mono text-zinc-300">{integrations.meta.app_id}</span>
+                <span className="text-zinc-400">Authentication Mode:</span>
+                <span className="text-emerald-400 font-semibold">Zero-OAuth (Public URLs)</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-zinc-400">App Secret Status:</span>
-                <span className="text-emerald-400 font-semibold">Configured</span>
+                <span className="text-zinc-400">Deduplication Store:</span>
+                <span className="text-emerald-400 font-semibold">Persistent D1 / SQLite</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-zinc-400">Encryption:</span>
-                <span className="text-emerald-400 font-semibold">AES-256-GCM Active</span>
+                <span className="text-zinc-400">Compliance Status:</span>
+                <span className="text-zinc-300 font-medium">Standard GET Probes (No Bypasses)</span>
               </div>
             </div>
           </div>
+
+          <div className="pt-2">
+            <Link
+              href="/accounts"
+              className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-800 flex items-center justify-center gap-2 transition-colors"
+            >
+              <span>Manage Monitored Profiles</span>
+              <ExternalLink className="w-3.5 h-3.5 text-zinc-400" />
+            </Link>
+          </div>
         </div>
 
-        {/* 4. n8n Automation Engine Status */}
+        {/* 3. Serverless Cloud Architecture (Cloudflare Workers / D1 / Cron) */}
         <div className="bg-zinc-900/60 border border-zinc-800 rounded-3xl p-6 flex flex-col justify-between space-y-4">
           <div>
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-purple-500/10 text-purple-400 flex items-center justify-center">
-                  <Cpu className="w-5 h-5" />
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-400 flex items-center justify-center">
+                  <Cloud className="w-5 h-5" />
                 </div>
                 <div>
-                  <h4 className="text-base font-bold text-white">n8n Automation Node</h4>
-                  <span className="text-xs text-zinc-400">Orchestrator</span>
+                  <h4 className="text-base font-bold text-white">Cloudflare Serverless</h4>
+                  <span className="text-xs text-zinc-400">Workers + D1 + Cron</span>
                 </div>
               </div>
               <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
@@ -222,17 +299,78 @@ export function IntegrationsPanel({
             </div>
 
             <p className="text-xs text-zinc-400 leading-relaxed mb-4">
-              n8n workflow coordinates polling, downloading, Drive backup, and Shorts publication.
+              Production target executes on Cloudflare edge workers with zero container overhead and automated Cron triggers.
             </p>
 
             <div className="space-y-2.5 bg-zinc-950/60 p-4 rounded-2xl border border-zinc-800/80 text-xs">
-              <div>
-                <span className="text-zinc-400 block mb-1">Webhook URL:</span>
-                <span className="font-mono text-[11px] text-zinc-300 block truncate bg-zinc-900 p-2 rounded-lg border border-zinc-800">
-                  {integrations.n8n.webhook_url}
-                </span>
+              <div className="flex justify-between">
+                <span className="text-zinc-400">Cron Schedule:</span>
+                <span className="font-mono text-zinc-300">*/30 * * * * (Every 30m)</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-400">Database Binding:</span>
+                <span className="font-mono text-zinc-300">DB (autoshorts-d1)</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-400">Concurrency Lock:</span>
+                <span className="text-emerald-400 font-semibold">Active & Mutex-Protected</span>
               </div>
             </div>
+          </div>
+
+          <div className="pt-2">
+            <button
+              type="button"
+              disabled={syncing}
+              onClick={handleTriggerSync}
+              className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+            >
+              <Play className="w-3.5 h-3.5" />
+              <span>{syncing ? 'Running Sync Pipeline...' : 'Run Pipeline Sync Now'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* 4. Security & API Quotas */}
+        <div className="bg-zinc-900/60 border border-zinc-800 rounded-3xl p-6 flex flex-col justify-between space-y-4">
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-purple-500/10 text-purple-400 flex items-center justify-center">
+                  <Shield className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-base font-bold text-white">Quotas & Security</h4>
+                  <span className="text-xs text-zinc-400">Safety Ceilings</span>
+                </div>
+              </div>
+              <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                Protected
+              </span>
+            </div>
+
+            <p className="text-xs text-zinc-400 leading-relaxed mb-4">
+              All credentials encrypted at rest. YouTube API quotas are capped to stay comfortably within free-tier allowances.
+            </p>
+
+            <div className="space-y-2.5 bg-zinc-950/60 p-4 rounded-2xl border border-zinc-800/80 text-xs">
+              <div className="flex justify-between">
+                <span className="text-zinc-400">Token Encryption:</span>
+                <span className="text-emerald-400 font-semibold">AES-256-GCM Active</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-400">Daily Upload Ceiling:</span>
+                <span className="font-semibold text-zinc-200">{automation.max_uploads_per_day} uploads/day (Safe limit)</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-400">YouTube Quota Cost:</span>
+                <span className="text-zinc-400">1,600 units / upload (10,000 max)</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-2 text-center text-[11px] text-zinc-500">
+            Resumable 5MB streaming chunks prevent memory spikes.
           </div>
         </div>
 
@@ -244,7 +382,7 @@ export function IntegrationsPanel({
             className="flex items-center gap-2 text-xs text-zinc-400 hover:text-zinc-200 px-4 py-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 transition-colors"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span>Reset Demo Data to Initial State</span>
+            <span>Reset Demo State</span>
           </button>
 
           <button

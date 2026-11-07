@@ -53,7 +53,7 @@ export default function SettingsPage() {
           </h1>
         </div>
         <p className="text-xs text-zinc-400">
-          Manage Google Drive storage folders, YouTube channel connection, Meta OAuth app keys, and system quotas.
+          Manage Google Drive storage folders, YouTube channel connection, public profile monitoring, and system quotas.
         </p>
       </div>
 

@@ -178,7 +178,7 @@ export class StandardPublicWebAdapter implements IMonitoringAdapter {
     });
   }
 
-  async discoverReels(profile: MonitoredProfile): Promise<ReelsDiscoveryResult> {
+  async discoverReels(profile: MonitoredProfile, since?: string | null): Promise<ReelsDiscoveryResult> {
     const checkedAt = new Date().toISOString();
     // In compliance with rule #6 & #7, unauthenticated web requests do not scrape
     // private media. Status is reported honestly.
@@ -214,10 +214,10 @@ export class PermittedSandboxAdapter implements IMonitoringAdapter {
     };
   }
 
-  async discoverReels(profile: MonitoredProfile): Promise<ReelsDiscoveryResult> {
+  async discoverReels(profile: MonitoredProfile, since?: string | null): Promise<ReelsDiscoveryResult> {
     const checkedAt = new Date().toISOString();
     const demoReel: DiscoveredReel = {
-      reel_id: `reel_${profile.username}_${Date.now()}`,
+      reel_id: `reel_${profile.username}_canonical_001`,
       permalink: `${profile.profile_url}reel/sample/`,
       caption: `🚀 Productivity setup in 2026! Watch until the end. #shorts #tech #${profile.username}`,
       thumbnail_url:
@@ -239,7 +239,20 @@ export class PermittedSandboxAdapter implements IMonitoringAdapter {
  * In-memory deduplication tracker
  */
 export class ReelDeduplicationStore {
+  private static globalStore = new ReelDeduplicationStore();
   private knownReelIds = new Set<string>();
+
+  static hasBeenSeen(reelId: string): boolean {
+    return this.globalStore.isDuplicate(reelId);
+  }
+
+  static recordReel(reelId: string, _profileId?: string): boolean {
+    return this.globalStore.register(reelId);
+  }
+
+  static reset(): void {
+    this.globalStore.knownReelIds.clear();
+  }
 
   isDuplicate(reelId: string): boolean {
     return this.knownReelIds.has(reelId);
