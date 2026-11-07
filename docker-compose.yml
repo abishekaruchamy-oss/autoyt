@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: autoshorts-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: autoshorts
+      POSTGRES_PASSWORD: autoshorts_secure_password_2026
+      POSTGRES_DB: autoshorts_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ./db/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autoshorts -d autoshorts_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: autoshorts-n8n
+    restart: always
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - NODE_ENV=production
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=UTC
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/data/workflows
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: autoshorts-dashboard
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://autoshorts:autoshorts_secure_password_2026@postgres:5432/autoshorts_db
+      - TOKEN_ENCRYPTION_KEY=a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90
+      - META_CLIENT_ID=${META_CLIENT_ID:-}
+      - META_CLIENT_SECRET=${META_CLIENT_SECRET:-}
+      - META_REDIRECT_URI=http://localhost:3000/api/auth/instagram/callback
+      - N8N_WEBHOOK_URL=http://n8n:5678/webhook/instagram-to-youtube-trigger
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  n8n_data:

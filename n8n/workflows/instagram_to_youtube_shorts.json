@@ -1,0 +1,313 @@
+{
+  "name": "Instagram to YouTube Shorts Multi-Account Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "1",
+      "name": "Schedule Trigger (Every 30m)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "instagram-to-youtube-trigger",
+        "options": {}
+      },
+      "id": "2",
+      "name": "Manual Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [100, 480]
+    },
+    {
+      "parameters": {
+        "url": "http://dashboard:3000/api/n8n/active-account",
+        "options": {}
+      },
+      "id": "3",
+      "name": "Fetch Dynamic Active Account from PostgreSQL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [360, 380]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.is_enabled }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "4",
+      "name": "Is Automation Enabled?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [580, 380]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://dashboard:3000/api/n8n/lock",
+        "options": {}
+      },
+      "id": "5",
+      "name": "Acquire Mutex Lock (Prevent Overlaps)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [800, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://graph.facebook.com/v19.0/{{ $('Fetch Dynamic Active Account from PostgreSQL').item.json.account.instagram_user_id }}/media",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "fields",
+              "value": "id,caption,media_type,media_url,thumbnail_url,permalink,timestamp"
+            },
+            {
+              "name": "access_token",
+              "value": "={{ $('Fetch Dynamic Active Account from PostgreSQL').item.json.account.access_token }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6",
+      "name": "Fetch Recent Instagram Reels",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1020, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://dashboard:3000/api/n8n/upload-status",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "status",
+              "value": "DOWNLOADING"
+            },
+            {
+              "name": "account_username",
+              "value": "={{ $('Fetch Dynamic Active Account from PostgreSQL').item.json.account.username }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7",
+      "name": "Report Downloading to Dashboard",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "name": "={{ $json.id }}.mp4",
+        "parents": [
+          "={{ $('Fetch Dynamic Active Account from PostgreSQL').item.json.settings.drive_folder_id }}"
+        ]
+      },
+      "id": "8",
+      "name": "Save Reel to Google Drive Storage",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1460, 300]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "title": "={{ $json.caption.substring(0, 70) }} #shorts",
+        "description": "={{ $json.caption }} \n\nOriginal Reel from Instagram @{{ $('Fetch Dynamic Active Account from PostgreSQL').item.json.account.username }}",
+        "categoryId": "22",
+        "privacyStatus": "={{ $('Fetch Dynamic Active Account from PostgreSQL').item.json.settings.default_visibility }}"
+      },
+      "id": "9",
+      "name": "Upload to YouTube Shorts",
+      "type": "n8n-nodes-base.youTube",
+      "typeVersion": 1,
+      "position": [1680, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://dashboard:3000/api/n8n/upload-status",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "status",
+              "value": "COMPLETED"
+            },
+            {
+              "name": "youtube_video_id",
+              "value": "={{ $json.id }}"
+            },
+            {
+              "name": "youtube_video_url",
+              "value": "=https://youtube.com/shorts/{{ $json.id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "10",
+      "name": "Report Success to Dashboard",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1900, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://dashboard:3000/api/n8n/unlock",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "success",
+              "value": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "11",
+      "name": "Release Execution Lock",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2120, 300]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger (Every 30m)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Dynamic Active Account from PostgreSQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Dynamic Active Account from PostgreSQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Dynamic Active Account from PostgreSQL": {
+      "main": [
+        [
+          {
+            "node": "Is Automation Enabled?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Automation Enabled?": {
+      "main": [
+        [
+          {
+            "node": "Acquire Mutex Lock (Prevent Overlaps)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Acquire Mutex Lock (Prevent Overlaps)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Recent Instagram Reels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Recent Instagram Reels": {
+      "main": [
+        [
+          {
+            "node": "Report Downloading to Dashboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report Downloading to Dashboard": {
+      "main": [
+        [
+          {
+            "node": "Save Reel to Google Drive Storage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Reel to Google Drive Storage": {
+      "main": [
+        [
+          {
+            "node": "Upload to YouTube Shorts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to YouTube Shorts": {
+      "main": [
+        [
+          {
+            "node": "Report Success to Dashboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report Success to Dashboard": {
+      "main": [
+        [
+          {
+            "node": "Release Execution Lock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
