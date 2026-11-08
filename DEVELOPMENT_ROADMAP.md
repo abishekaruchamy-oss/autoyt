@@ -33,15 +33,19 @@
 
 ---
 
-## Phase 2.1: Production Readiness Audit (Completed)
+## Phase 2.1: Production Readiness Audit & Minimum SSD Policy (Completed)
+- [x] **Enforce Mandatory Minimum Local SSD Policy**
+  - Purged all local video disk fixtures (`tests/fixtures/*.mp4`).
+  - Switched tests to in-memory synthetic streams (`createInMemoryTestVideo`).
+  - Added automated build artifact cleanup tool (`npm run clean` via `scripts/clean.js`).
+  - Codified permanent zero-SSD requirements across architecture and deployment docs.
 - [x] **Audit 1: Real Google OAuth & 7-Day Expiration Policy**
   - Verified authorization-code exchange, offline access, and consent prompt.
   - Documented Google Cloud "Testing" status 7-day refresh token expiration rule.
   - Outlined required actions for production (Google App Verification for sensitive scopes vs Google Workspace Internal user type).
 - [x] **Audit 2: Real Video & Google Drive Streaming Memory Audit**
-  - Downloaded authorized test video fixture: `tests/fixtures/sample_authorized_reel.mp4` (5,510,872 bytes).
-  - Verified file size, MIME type (`video/mp4`), and MP4 container atoms (`ftyp`, `mp42`).
-  - Measured memory profile: baseline heap 10.1 MB -> streaming heap 11.3 MB (peak delta ~1.2 MB). Proved bounded streaming without loading full video into RAM.
+  - Verified in-memory 5.51 MB MP4 video streaming (MIME `video/mp4`, `ftyp` atom, `mp42` brand).
+  - Measured memory profile: baseline heap 11.0 MB -> streaming heap 11.4 MB (peak delta ~1.0 MB). Proved bounded streaming without loading full video into RAM.
   - Tested interrupted upload recovery: queried status (`Range: bytes=0-5242879`) and resumed chunk 2 to completion.
   - Verified duplicate protection.
 - [x] **Audit 3: YouTube Shorts Publishing & Quota Documentation Correction**

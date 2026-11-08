@@ -26,7 +26,7 @@ AutoShorts is designed for zero-maintenance, free-tier serverless cloud operatio
  │   - integrations_config      │
  └──────────────┬───────────────┘
                 │
-                │ Authorized Original Media Pipeline (Bounded Streaming)
+                │ Authorized Original Media Pipeline (Bounded In-Memory Streaming)
  ┌──────────────▼───────────────┐ ┌─────────────────────────────┐
  │    Google Drive API (One)    │ │   YouTube Data API v3       │
  │  Original Video Archival     │ │   Auto Shorts Publishing    │
@@ -38,28 +38,55 @@ AutoShorts is designed for zero-maintenance, free-tier serverless cloud operatio
 
 ---
 
-## 2. Instagram Monitoring Reality & Permitted Public Probing
+## 2. Cloud-First Development & Minimum Local SSD Policy (Mandatory)
 
-### 2.1 The Technical Reality of Unauthenticated Instagram Web Access
+> [!CRITICAL]
+> **Permanent Architectural Rule**: The developer/user's laptop SSD must **never** be used as project video storage or media processing storage. The goal is **near-zero laptop SSD consumption** across all workflows.
+
+### 2.1 Core Invariants
+1. **Zero Local Video Downloads**:
+   - The application streams videos directly from authorized remote sources to Google Drive (`GoogleDriveService.streamVideoToDrive`) in memory chunks without ever writing a `.mp4` file to local disk.
+   - Videos stream directly from Google Drive / remote URL to YouTube Shorts (`YouTubeService.streamVideoToYouTube`) via HTTP range streams in 5MB memory chunks.
+   - Neither the web dashboard, background pipeline, nor automated test suites save `.mp4` or media files to the host machine.
+   - All automated test fixtures generate synthetic in-memory streams (`createInMemoryTestVideo`), ensuring 0 bytes written to SSD.
+2. **Zero Local Database Installations**:
+   - Docker Desktop, local PostgreSQL server instances, and local container volumes are strictly banned from production runtime.
+   - All persistent databases are hosted in **Cloudflare D1** (Serverless SQLite in the cloud).
+   - In-memory state with zero disk persistence is used as local/test fallback.
+3. **Remote Development & Execution**:
+   - The canonical repository is hosted on **GitHub**.
+   - Remote development environments (such as **GitHub Codespaces**) are the preferred client to run dependency installs, compilation, tests, and builds without placing wear or storage load on local SSDs.
+4. **Antigravity Environment Reality**:
+   - When Antigravity executes in a local workspace, it must not download video assets, retain heavy build artifacts, or create persistent local media caches.
+   - Workspaces located inside cloud-sync folders (e.g. OneDrive) must be protected against disk churn and file lock conflicts (`EPERM`) by excluding build folders (`.next`, `.turbo`) from local sync.
+5. **Proactive Cleanup**:
+   - An automated cleanup tool (`npm run clean` -> `scripts/clean.js`) purges temporary build folders (`.next`, `out`, `.turbo`) safely.
+   - *Note on Honest Reporting*: The policy targets near-zero project SSD usage; it does not claim literal absolute zero because operating systems and web browsers inherently maintain transient page caches and socket buffers.
+
+---
+
+## 3. Instagram Monitoring Reality & Permitted Public Probing
+
+### 3.1 The Technical Reality of Unauthenticated Instagram Web Access
 Standard HTTP GET requests to Instagram profile URLs:
 - Return HTTP 200 with an unhydrated client-side React shell (`<div id="mount_0_0_..."></div>`).
 - Meta does NOT perform server-side rendering (SSR) of media for unauthenticated users.
 - Internal endpoints (`/api/v1/users/web_profile_info/`) return HTTP 404 or redirect to login checkpoints when requested without active authenticated session cookies.
 - Direct video URLs (`cdninstagram.com`) are ephemeral and token-signed.
 
-### 2.2 Anti-Bypass Compliance
+### 3.2 Anti-Bypass Compliance
 In accordance with our core policy:
 - No headless browser stealth tricks, CAPTCHA bypasses, or proxy rotation are used.
 - The monitoring adapter (`StandardPublicWebAdapter`) honestly registers `status_reason: "Profile page connected (HTTP 200). Ready for authorized media updates."` without fabricating media.
 
-### 2.3 Supported Production Alternatives
+### 3.3 Supported Production Alternatives
 1. **Meta Instagram Graph API**: Creator / Business accounts connected via Facebook Page. Supports webhooks on new post publication.
 2. **Creator RSS / Syndication Feeds**: Automated feed polling.
 3. **Creator Direct URL Submission**: Direct ingestion via dashboard.
 
 ---
 
-## 3. Google OAuth 2.0 & Token Lifecycle Security
+## 4. Google OAuth 2.0 & Token Lifecycle Security
 
 - **Scopes Requested**:
   - `https://www.googleapis.com/auth/drive.file` (Non-sensitive, per-file access)
@@ -73,20 +100,20 @@ In accordance with our core policy:
 
 ---
 
-## 4. Google Drive Resumable Streaming & Bounded Memory Profile
+## 5. Google Drive Resumable Streaming & Bounded Memory Profile
 
 - **Chunked Transfer Protocol**: 5MB binary chunks (`uploadStreamChunk`) using HTTP range headers (`Content-Range: bytes START-END/TOTAL`) and HTTP 308 (Resume Incomplete).
 - **Bounded Memory Profile (Empirical Measurement)**:
   - Total video size: **5,510,872 bytes** (5.51 MB)
   - Active streaming heap buffer delta: **~1.2 MB**
   - RSS: 62 MB baseline -> 93 MB active streaming
-  - Zero whole-file RAM buffering: Only the active 5MB chunk is in memory at any given time.
+  - Zero whole-file RAM buffering: Only the active 5MB chunk is in memory at any given time. Zero bytes written to local SSD.
 - **Interruption Recovery**: Can query `queryResumableStatus(sessionUri, totalBytes)` with `bytes */total` to retrieve `Range: bytes=0-<lastByte>` and resume without restarting.
 - **Deduplication**: `checkFileExists` searches target folder before creating upload sessions.
 
 ---
 
-## 5. YouTube Shorts Publishing & Upload Quota Bucket
+## 6. YouTube Shorts Publishing & Upload Quota Bucket
 
 - **Upload Quota Architecture**:
   - YouTube Data API v3 enforces a dedicated daily video upload bucket (default: **~100 uploads/day**), distinct from the general 10,000 project quota units.
@@ -97,7 +124,7 @@ In accordance with our core policy:
 
 ---
 
-## 6. End-to-End Pipeline State Machine
+## 7. End-to-End Pipeline State Machine
 
 ```
 [Profile Check] ──────► [Reel Detected]
@@ -109,13 +136,13 @@ In accordance with our core policy:
              (Duplicate)             (New)
                     │                   │
                  [Skip]                 ▼
-                                  [DOWNLOADING]
+                                  [DOWNLOADING] (In-Memory Stream)
                                         │
                                         ▼
-                                  [STORED_DRIVE]
+                                  [STORED_DRIVE] (Google Drive Cloud Archive)
                                         │
                                         ▼
-                              [UPLOADING_YOUTUBE]
+                              [UPLOADING_YOUTUBE] (Resumable Stream to Shorts)
                                         │
                                ┌────────┴────────┐
                            (Success)          (Error)

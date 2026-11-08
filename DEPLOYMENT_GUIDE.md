@@ -131,3 +131,29 @@ npx wrangler secret put TOKEN_ENCRYPTION_KEY
      "database": { "mode": "Cloudflare D1 (Bound)", "connected": true }
    }
    ```
+
+---
+
+## 7. Cloud-First Development & Minimum Local SSD Policy
+
+> [!CRITICAL]
+> **Permanent Architectural Rule**: The developer or user's laptop SSD must not be used as project video storage or media-processing storage. The goal is **near-zero laptop SSD consumption**.
+
+### 7.1 Remote Development Workflow (Recommended)
+1. **Host Canonical Code on GitHub**:
+   - Push code to a remote GitHub repository.
+2. **Use GitHub Codespaces**:
+   - Open the repository in GitHub Codespaces or a remote cloud container.
+   - Run dependency installation (`npm install`), compilation (`npm run build`), test execution (`npm test`), and deployment (`wrangler deploy`) in the remote cloud environment.
+   - The user's laptop is used strictly as a browser client, placing **zero build artifact or cache load on the local SSD**.
+
+### 7.2 Local Development with Antigravity
+When Antigravity runs locally:
+- **Zero Local Media Files**: Do not download video files to the machine. Test suites run on in-memory synthetic streams (`createInMemoryTestVideo`).
+- **Post-Development Purge**: After running builds or tests locally, run:
+  ```bash
+  npm run clean
+  ```
+  This immediately removes `.next`, `out`, and `.turbo` build folders from the disk.
+- **OneDrive Sync Protection**: If your workspace resides inside a synced OneDrive folder, exclude `.next` and `node_modules` from sync to prevent background file locks (`EPERM`) and unnecessary cloud storage consumption.
+
