@@ -29,6 +29,10 @@ The test suites are organized into **Unit Tests**, **Public Profile Lifecycle Te
 | **Phase 3 Pipeline** | End-to-End Zero-SSD Streaming Pipeline | **PASS** | 2026-11-08 | In-memory 5MB streaming from source to Google Drive and YouTube Shorts (0 bytes on disk) |
 | **Phase 3 Pipeline** | Reel Deduplication Protection | **PASS** | 2026-11-08 | Duplicate submissions return existing job and prevent redundant YouTube uploads |
 | **Phase 3 Worker** | Cloudflare Worker Submission Routes | **PASS** | 2026-11-08 | Worker `/api/reels/submit` and `/api/reels?shortcode=...` routes verified |
+| **Phase 3.1 Media** | Real Direct Video Stream Retrieval | **PASS** | 2026-11-08 | 1,128,375 bytes, MIME `video/mp4`, atom `ftyp`, brand `mp42`, 0 bytes on SSD |
+| **Phase 3.1 Media** | Real Creator CDN Stream Retrieval | **PASS** | 2026-11-08 | 5,510,872 bytes (5.51 MB) verified via HEAD request |
+| **Phase 3.1 Media** | Real Instagram Unauthenticated Probe | **PASS** | 2026-11-08 | Honestly returns `WAITING_FOR_AUTHORIZED_MEDIA` without access bypass |
+| **Phase 3.1 Live** | Google OAuth Credential Detection | **PASS** | 2026-11-08 | Runner checks real credentials, awaiting user OAuth authorization |
 | **Production Build** | Next.js 16.4.5 App Router Build | **PASS** | 2026-11-08 | 30 static and dynamic routes compiled with 0 errors |
 
 ---
