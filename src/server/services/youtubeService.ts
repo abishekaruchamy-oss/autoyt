@@ -106,9 +106,9 @@ export class YouTubeService {
 
     if (!res.ok) {
       const err = await res.text();
-      if (err.includes('quotaExceeded')) {
+      if (err.includes('quotaExceeded') || err.includes('uploadLimitExceeded')) {
         throw new Error(
-          'YouTube Data API quota exceeded (10,000 units/day limit). Each upload costs 1,600 units (~6 uploads/day on free tier).'
+          'YouTube upload limit or Data API quota exceeded. Note: YouTube enforces a separate daily video upload bucket (default limit is approximately 100 uploads/day) alongside the general API quota.'
         );
       }
       throw new Error(`Failed to initiate YouTube resumable upload: ${err}`);
@@ -120,6 +120,38 @@ export class YouTubeService {
     }
 
     return { sessionUri, title, description };
+  }
+
+  /**
+   * Queries status of an interrupted YouTube resumable upload session
+   */
+  static async queryResumableStatus(
+    sessionUri: string,
+    totalBytes: number
+  ): Promise<{ isComplete: boolean; bytesReceived: number }> {
+    const res = await fetch(sessionUri, {
+      method: 'PUT',
+      headers: {
+        'Content-Range': `bytes */${totalBytes}`,
+      },
+    });
+
+    if (res.status === 200 || res.status === 201) {
+      return { isComplete: true, bytesReceived: totalBytes };
+    }
+
+    if (res.status === 308) {
+      const range = res.headers.get('Range');
+      if (range) {
+        const match = range.match(/bytes=0-(\d+)/);
+        if (match) {
+          return { isComplete: false, bytesReceived: parseInt(match[1], 10) + 1 };
+        }
+      }
+      return { isComplete: false, bytesReceived: 0 };
+    }
+
+    throw new Error(`Unexpected status querying YouTube resumable upload: ${res.status}`);
   }
 
   /**

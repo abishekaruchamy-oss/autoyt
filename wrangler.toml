@@ -1,7 +1,8 @@
-# Cloudflare Pages / Workers Configuration for AutoShorts
+# Cloudflare Workers & D1 Configuration for AutoShorts
 name = "autoshorts"
+main = "src/server/worker.ts"
 compatibility_date = "2024-04-01"
-pages_build_output_dir = ".next"
+compatibility_flags = ["nodejs_compat"]
 
 # Cloudflare D1 Serverless SQLite Database Binding
 [[d1_databases]]
@@ -15,9 +16,9 @@ crons = ["*/30 * * * *"] # Executes every 30 minutes
 
 # Production Environment Variables (Public)
 [vars]
-NEXT_PUBLIC_APP_URL = "https://autoshorts.pages.dev"
+NEXT_PUBLIC_APP_URL = "https://autoshorts.workers.dev"
 STORAGE_DEFAULT_FOLDER = "Instagram Reels Backup"
 POLLING_INTERVAL_MINUTES = "30"
 
-# Note: Sensitive secrets (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET)
-# should be uploaded via `wrangler secret put <KEY>` and never committed to version control.
+# Note: Sensitive secrets (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, TOKEN_ENCRYPTION_KEY)
+# must be configured via `wrangler secret put <KEY>` and never committed to version control.

@@ -360,11 +360,11 @@ export function IntegrationsPanel({
               </div>
               <div className="flex justify-between">
                 <span className="text-zinc-400">Daily Upload Ceiling:</span>
-                <span className="font-semibold text-zinc-200">{automation.max_uploads_per_day} uploads/day (Safe limit)</span>
+                <span className="font-semibold text-zinc-200">{automation.max_uploads_per_day} uploads/day (Configurable)</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-zinc-400">YouTube Quota Cost:</span>
-                <span className="text-zinc-400">1,600 units / upload (10,000 max)</span>
+                <span className="text-zinc-400">YouTube Upload Limit Bucket:</span>
+                <span className="text-zinc-400 font-mono text-[11px]">~100 uploads/day limit</span>
               </div>
             </div>
           </div>
