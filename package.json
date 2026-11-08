@@ -9,7 +9,8 @@
     "lint": "eslint",
     "test": "tsx tests/test-suite.ts",
     "test:audit": "tsx tests/production-readiness-audit.ts",
-    "test:all": "tsx tests/test-suite.ts && tsx tests/production-readiness-audit.ts",
+    "test:phase3": "tsx tests/phase3-submission-engine.ts",
+    "test:all": "tsx tests/test-suite.ts && tsx tests/production-readiness-audit.ts && tsx tests/phase3-submission-engine.ts",
     "clean": "node scripts/clean.js"
   },
   "dependencies": {

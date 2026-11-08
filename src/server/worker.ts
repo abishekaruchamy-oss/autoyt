@@ -182,6 +182,56 @@ export default {
         return new Response(JSON.stringify({ success: true, jobs }), { status: 200, headers: jsonHeaders });
       }
 
+      // 8. Reel Direct Submission Engine (Phase 3B)
+      if (path === '/api/reels/submit' && method === 'POST') {
+        const body = (await request.json()) as any;
+        if (!body.reelUrl) {
+          return new Response(
+            JSON.stringify({ success: false, error: 'Instagram Reel URL is required.' }),
+            { status: 400, headers: jsonHeaders }
+          );
+        }
+        if (!body.confirmedRights) {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              error: 'Compliance requirement: Creator copyright or distribution rights confirmation is required.',
+            }),
+            { status: 400, headers: jsonHeaders }
+          );
+        }
+
+        const job = await PipelineService.processSubmission(
+          {
+            reelUrl: body.reelUrl,
+            directVideoUrl: body.directVideoUrl,
+            driveFileId: body.driveFileId,
+            captionOverride: body.captionOverride,
+            visibility: body.visibility || 'private',
+            confirmedRights: Boolean(body.confirmedRights),
+          },
+          { sandbox: Boolean(body.sandbox) }
+        );
+
+        return new Response(
+          JSON.stringify({ success: true, message: `Reel processed. Status: ${job.status}`, job }),
+          { status: 200, headers: jsonHeaders }
+        );
+      }
+
+      if (path === '/api/reels' && method === 'GET') {
+        const shortcode = url.searchParams.get('shortcode');
+        if (shortcode) {
+          const job = await Repository.getUploadJobByShortcode(shortcode);
+          return new Response(
+            JSON.stringify({ success: true, count: job ? 1 : 0, jobs: job ? [job] : [] }),
+            { status: 200, headers: jsonHeaders }
+          );
+        }
+        const jobs = await Repository.getUploadJobs();
+        return new Response(JSON.stringify({ success: true, count: jobs.length, jobs }), { status: 200, headers: jsonHeaders });
+      }
+
       return new Response(JSON.stringify({ error: `Not Found: ${path}` }), { status: 404, headers: jsonHeaders });
     } catch (err) {
       return new Response(

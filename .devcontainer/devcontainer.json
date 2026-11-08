@@ -1,0 +1,33 @@
+{
+  "name": "AutoShorts Remote Cloud Environment (Zero-Local-SSD)",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:1-20-bullseye",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "forwardPorts": [3000, 8787],
+  "portsAttributes": {
+    "3000": {
+      "label": "AutoShorts Web Dashboard",
+      "onAutoForward": "openBrowser"
+    },
+    "8787": {
+      "label": "Cloudflare Worker API Dev",
+      "onAutoForward": "silent"
+    }
+  },
+  "postCreateCommand": "npm install && npm run test:all",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "typescript.tsdk": "node_modules/typescript/lib",
+        "terminal.integrated.defaultProfile.linux": "bash"
+      },
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "bradlc.vscode-tailwindcss",
+        "esbenp.prettier-vscode"
+      ]
+    }
+  },
+  "remoteUser": "node"
+}

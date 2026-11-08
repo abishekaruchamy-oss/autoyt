@@ -43,3 +43,23 @@
 - **Context**: The official `googleapis` npm package is over 50MB and relies on Node.js-specific modules (`http`, `https`, `stream`) that fail or bloat Cloudflare Workers / Edge bundles.
 - **Decision**: Build lightweight native API wrappers (`GoogleDriveService`, `YouTubeService`, `GoogleAuthService`) using the standard Web `fetch` API.
 - **Consequences**: Zero bundle bloat, zero dependency conflicts, fast cold starts on Cloudflare Pages and Workers.
+
+## ADR-010: Mandatory Minimum Local SSD Policy
+- **Context**: Video automation workflows can quickly fill local SSD drives with multi-gigabyte video caches, build artifacts, and test fixtures.
+- **Decision**: Formulate a mandatory architectural requirement that zero video binaries are stored on the developer's laptop SSD. All test suites generate synthetic in-memory streams (`createInMemoryTestVideo`), and automated clean scripts (`npm run clean`) purge build artifacts.
+- **Consequences**: Prevents laptop disk wear, OneDrive sync thrashing, and unnecessary storage consumption.
+
+## ADR-011: Direct Reel URL Submission as Primary Ingestion Flow
+- **Context**: Meta aggressively restricts unauthenticated web scraping on public profile pages, rendering passive URL polling unreliable without session cookies or bot-like behavior.
+- **Decision**: Make direct creator Reel URL submission (`/submit-reel`) the primary user flow. Users paste specific Reel links with explicit ownership/copyright confirmation.
+- **Consequences**: Eliminates reliance on brittle scraping while maintaining seamless streaming into Google Drive and YouTube Shorts.
+
+## ADR-012: Provider-Independent MediaResolver Chain
+- **Context**: Different Reels originate from diverse sources: user-provided streams, creator CDN links, Google Drive files, Meta Graph API, or public links.
+- **Decision**: Implement a decoupled provider hierarchy (`IMediaProvider`) via `MediaResolver` that probes sources in priority order and honestly reports `WAITING_FOR_AUTHORIZED_MEDIA` when platform session authentication is required.
+- **Consequences**: Easy extensibility, clean testing with `SandboxTestProvider`, and zero anti-bot policy violations.
+
+## ADR-013: Granular Pipeline State Machine
+- **Context**: Moving from a binary "DETECTED" vs "COMPLETED" state to a multi-stage streaming pipeline required visibility into individual intermediate stages.
+- **Decision**: Expand `JobStatus` to include `SUBMITTED`, `VALIDATING`, `RESOLVING_MEDIA`, `MEDIA_AVAILABLE`, `WAITING_FOR_AUTHORIZED_MEDIA`, `ARCHIVING_TO_DRIVE`, `STORED_IN_DRIVE`, `UPLOADING_TO_YOUTUBE`, `VERIFYING_UPLOAD`, `COMPLETED`, and `FAILED`.
+- **Consequences**: Real-time observability on both the dashboard and worker cron, clear user messaging, and deterministic retry handling.

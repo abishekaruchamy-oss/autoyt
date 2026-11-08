@@ -9,15 +9,33 @@ export type ProfileMonitoringStatus =
 export type AccountStatus = 'ACTIVE' | 'EXPIRED' | 'DISCONNECTED' | 'ERROR';
 
 export type JobStatus =
+  | 'SUBMITTED'
+  | 'VALIDATING'
+  | 'RESOLVING_MEDIA'
+  | 'MEDIA_AVAILABLE'
+  | 'WAITING_FOR_AUTHORIZED_MEDIA'
+  | 'ARCHIVING_TO_DRIVE'
+  | 'STORED_IN_DRIVE'
+  | 'UPLOADING_TO_YOUTUBE'
+  | 'VERIFYING_UPLOAD'
+  | 'COMPLETED'
+  | 'FAILED'
+  // Legacy aliases
   | 'DETECTED'
   | 'DOWNLOADING'
   | 'STORED_DRIVE'
-  | 'UPLOADING_YOUTUBE'
-  | 'COMPLETED'
-  | 'FAILED'
   | 'RETRYING';
 
 export type PublishingVisibility = 'public' | 'unlisted' | 'private';
+
+export interface ReelSubmissionPayload {
+  reelUrl: string;
+  directVideoUrl?: string;
+  driveFileId?: string;
+  captionOverride?: string;
+  visibility?: PublishingVisibility;
+  confirmedRights: boolean;
+}
 
 /**
  * Public Monitored Instagram Profile (Phase 1.1)
@@ -106,6 +124,9 @@ export interface UploadJob {
   max_retries: number;
   detected_at: string;
   completed_at: string | null;
+  shortcode?: string;
+  rights_confirmed?: boolean;
+  media_source_type?: string;
   created_at: string;
   updated_at: string;
 }

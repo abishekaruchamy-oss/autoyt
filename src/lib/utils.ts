@@ -123,19 +123,70 @@ export function getJobStatusBadge(status: string): {
         border: 'border-emerald-500/20',
         label: 'Live on Shorts',
       };
+    case 'VERIFYING_UPLOAD':
+      return {
+        bg: 'bg-teal-500/10',
+        text: 'text-teal-400',
+        border: 'border-teal-500/20',
+        label: 'Verifying Upload',
+      };
+    case 'UPLOADING_TO_YOUTUBE':
     case 'UPLOADING_YOUTUBE':
       return {
         bg: 'bg-blue-500/10',
         text: 'text-blue-400',
         border: 'border-blue-500/20',
-        label: 'Uploading YouTube',
+        label: 'Uploading to YouTube',
       };
+    case 'STORED_IN_DRIVE':
     case 'STORED_DRIVE':
       return {
         bg: 'bg-cyan-500/10',
         text: 'text-cyan-400',
         border: 'border-cyan-500/20',
         label: 'Saved to Drive',
+      };
+    case 'ARCHIVING_TO_DRIVE':
+      return {
+        bg: 'bg-indigo-500/10',
+        text: 'text-indigo-400',
+        border: 'border-indigo-500/20',
+        label: 'Archiving to Drive',
+      };
+    case 'MEDIA_AVAILABLE':
+      return {
+        bg: 'bg-emerald-500/10',
+        text: 'text-emerald-300',
+        border: 'border-emerald-500/20',
+        label: 'Media Ready',
+      };
+    case 'WAITING_FOR_AUTHORIZED_MEDIA':
+      return {
+        bg: 'bg-amber-500/10',
+        text: 'text-amber-400',
+        border: 'border-amber-500/20',
+        label: 'Waiting for Media Stream',
+      };
+    case 'RESOLVING_MEDIA':
+      return {
+        bg: 'bg-purple-500/10',
+        text: 'text-purple-400',
+        border: 'border-purple-500/20',
+        label: 'Resolving Media',
+      };
+    case 'VALIDATING':
+      return {
+        bg: 'bg-purple-500/10',
+        text: 'text-purple-300',
+        border: 'border-purple-500/20',
+        label: 'Validating URL',
+      };
+    case 'SUBMITTED':
+      return {
+        bg: 'bg-zinc-500/10',
+        text: 'text-zinc-300',
+        border: 'border-zinc-500/20',
+        label: 'Submitted',
       };
     case 'DOWNLOADING':
       return {

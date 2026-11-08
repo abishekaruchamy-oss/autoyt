@@ -1,0 +1,35 @@
+name: Remote Cloud Build & Test Verification
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Cloud Environment Verification (Zero Local SSD)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies Remotely
+        run: npm ci
+
+      - name: Run TypeScript & Audit Test Suites Remotely
+        run: npm run test:all
+
+      - name: Run Next.js Production Build Remotely
+        run: npm run build
+
+      - name: Verify Clean Workspace
+        run: npm run clean

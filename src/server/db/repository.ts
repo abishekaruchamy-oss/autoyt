@@ -411,6 +411,20 @@ export class Repository {
     return store.uploadJobs.find((j) => j.id === id) || null;
   }
 
+  static async getUploadJobByShortcode(shortcode: string): Promise<UploadJob | null> {
+    const clean = shortcode.trim();
+    return (
+      store.uploadJobs.find(
+        (j) => j.shortcode === clean || j.original_reel_url?.includes(clean)
+      ) || null
+    );
+  }
+
+  static async getUploadJobByOriginalUrl(url: string): Promise<UploadJob | null> {
+    const clean = url.trim().toLowerCase();
+    return store.uploadJobs.find((j) => j.original_reel_url?.toLowerCase() === clean) || null;
+  }
+
   static async retryUploadJob(id: string): Promise<UploadJob | null> {
     const job = await this.getUploadJobById(id);
     if (!job) return null;
@@ -463,6 +477,9 @@ export class Repository {
       max_retries: 3,
       detected_at: new Date().toISOString(),
       completed_at: null,
+      shortcode: job.shortcode,
+      rights_confirmed: job.rights_confirmed,
+      media_source_type: job.media_source_type,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };

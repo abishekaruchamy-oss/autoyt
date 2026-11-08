@@ -4,102 +4,82 @@
 **Operating Mode**: Autonomous Project Execution
 **Application Name**: AutoShorts (Instagram to YouTube Shorts Automation Platform)
 **Mandatory Architectural Mandate**: **Cloud-First Development & Minimum Local SSD Policy**
-**Current Stage**: **Phase 2.1 – Production Readiness Audit & Minimum SSD Policy Implementation (Complete)**
+**Current Stage**: **Phase 3 – Remote Development & Reel URL Automation (Complete & Verified)**
 
 ---
 
 ## 1. Executive Summary
 
-Phase 2.1 Production Readiness Audit has been completed with all tests passing, and the **Minimum Local SSD Policy** has been permanently codified into the system architecture.
+Phase 3 is complete and thoroughly tested. AutoShorts now features a direct **Instagram Reel URL Submission Engine** as its primary workflow, integrated with the existing streaming pipeline, deduplication engine, and Cloudflare Worker runtime. Remote development infrastructure (Dev Container & GitHub Actions) has been established to support zero-SSD cloud execution.
 
 ### Permanent Zero-SSD Invariants
-- **No Local Video Storage**: Videos stream directly between remote cloud APIs (Source -> Google Drive -> YouTube Shorts) in 5MB in-memory chunk buffers. No complete video files or video archives are ever written to the local laptop SSD.
-- **Pure In-Memory Test Media**: All automated test suites generate synthetic valid MP4 container buffers purely in temporary RAM (`createInMemoryTestVideo`). All previous disk fixtures (`tests/fixtures/*.mp4`) have been permanently purged.
-- **No Local Database / Docker Dependency**: Production uses **Cloudflare D1** (Serverless SQLite in the cloud). Local Docker Desktop and PostgreSQL container installations are avoided.
+- **No Local Video Storage**: Videos stream directly between remote cloud APIs (Source -> Google Drive -> YouTube Shorts) in 5MB in-memory chunk buffers. No video binaries are ever saved to the local laptop SSD.
+- **Pure In-Memory Test Media**: All automated test suites generate synthetic valid MP4 container buffers purely in temporary RAM (`createInMemoryTestVideo`). 0 bytes on disk.
+- **No Local Database / Docker Dependency**: Production uses **Cloudflare D1** (Serverless SQLite in the cloud).
 - **Remote Cloud Hosting**: Automation runs on Cloudflare Workers and Cloudflare Cron triggers.
 - **Automated Disk Cleanup**: Added `npm run clean` (`scripts/clean.js`) to purge transient build folders (`.next`, `out`, `.turbo`).
 
 ---
 
-## 2. Antigravity Environment & Remote Development Audit
+## 2. Remote Development Migration (Phase 3A)
 
-### Antigravity Environment Findings
-- Antigravity currently operates as a local paired-programming agent executing commands on the user's host OS (`windows`, working directory `c:\Users\Abishek\OneDrive\Desktop\n8n`).
-- **OneDrive Storage Impact**: Because the repository is located inside a OneDrive directory, background OneDrive synchronization monitors and uploads build artifacts (`.next`, cache chunks), causing disk I/O, file locks (`EPERM`), and unnecessary cloud storage consumption.
-- **Recommended Cloud-First Workflow**:
-  1. The canonical repository is maintained on **GitHub**.
-  2. Developers should prefer **GitHub Codespaces** or remote cloud Dev Containers to run dependencies, builds, and tests in the cloud with zero laptop disk wear.
-  3. When running locally with Antigravity, developers can run `npm run clean` after development sessions to purge generated build artifacts immediately.
+### Dev Container & Remote Verification
+- Created `.devcontainer/devcontainer.json` configuring a standardized Node.js 20 LTS environment with TypeScript, GitHub CLI, and automatic port forwarding (`3000` for Next.js, `8787` for Wrangler edge runtime).
+- Created `.github/workflows/remote-verify.yml` enabling automated cloud CI/CD execution of TypeScript verification, the 24-test suite, and Next.js production builds upon pushing to GitHub.
+- **Antigravity Remote Architecture**: Antigravity runs as a client on Windows paired with the remote Git repository. Developers can develop directly from GitHub Codespaces or remote environments, while local sessions automatically purge build artifacts via `npm run clean`.
 
 ---
 
-## 3. Production Audit Findings & Subsystem Status
+## 3. Reel URL Submission Engine (Phase 3B)
+
+### Features Implemented
+1. **Direct Reel URL Dashboard (`/submit-reel`)**:
+   - Mobile-responsive, dark-mode submission UI with live client-side shortcode extraction badge.
+   - Optional creator-authorized direct MP4 stream or CDN link input.
+   - YouTube Shorts visibility selector (`private` default, `unlisted`, `public`).
+   - Mandatory creator copyright / ownership confirmation checkbox.
+   - Real-time submission queue monitor table with granular pipeline state badges.
+2. **Shortcode Extraction & Canonicalization (`extractReelShortcode`)**:
+   - Accurately parses standard Reel URLs (`/reel/<code>`), Reels tab URLs (`/reels/<code>`), post URLs (`/p/<code>`), `instagr.am` links, tracking query parameters (`?igsh=...`), and direct shortcodes.
+   - Normalizes to canonical format `https://www.instagram.com/reel/<shortcode>/`.
+3. **Provider-Independent Media Resolution (`MediaResolver`)**:
+   - `UserDirectStreamProvider`: Resolves direct MP4 streams immediately.
+   - `CreatorAuthorizedUrlProvider`: Resolves creator CDN links.
+   - `UserDirectStreamProvider` (Drive source): Attaches Google Drive video file ID.
+   - `StandardPublicProbeProvider`: Checks public URL reachability and oEmbed metadata; honestly reports `WAITING_FOR_AUTHORIZED_MEDIA` without bypassing login walls, CAPTCHAs, or anti-bot protections.
+   - `SandboxTestProvider`: Simulates end-to-end authorized streaming transfers for verification.
+4. **Expanded Pipeline State Machine**:
+   - Granular transitions: `SUBMITTED` → `VALIDATING` → `RESOLVING_MEDIA` → `MEDIA_AVAILABLE` / `WAITING_FOR_AUTHORIZED_MEDIA` → `ARCHIVING_TO_DRIVE` → `STORED_IN_DRIVE` → `UPLOADING_TO_YOUTUBE` → `VERIFYING_UPLOAD` → `COMPLETED` / `FAILED`.
+5. **Deduplication Engine**:
+   - Indexed shortcode queries (`getUploadJobByShortcode`) prevent re-uploading and duplicate processing of previously submitted or completed Reels.
+6. **API Endpoints**:
+   - `POST /api/reels/submit`: Handles validation, rights confirmation check, and triggers `PipelineService.processSubmission`.
+   - `GET /api/reels`: Returns submitted Reel queue with shortcode and status filters.
+   - Fully routed in both Next.js App Router and Cloudflare Worker runtime (`src/server/worker.ts`).
+
+---
+
+## 4. Subsystem Audit & Production Matrix
 
 | Subsystem | Audit Status | Production State | Key Empirical Findings |
 |---|---|---|---|
 | **Local SSD Storage** | **ENFORCED (0 Disk Videos)** | Minimum SSD Active | 0 bytes of video files on disk. Pure in-memory streaming with automated cleanup script (`scripts/clean.js`). |
-| **Google OAuth 2.0** | **PASS** | Staging / Requires Cloud Verification | Tested authorization code exchange, AES-256-GCM token encryption, and auto-refresh. Identified 7-day token expiration in Google "Testing" mode. |
-| **Google Drive Archival** | **PASS** | Production Ready | Tested 5.51 MB MP4 video streaming. Measured memory: bounded ~5.2 MB chunk buffer. Verified interrupted transfer recovery via `Range: bytes=0-5242879`. |
-| **YouTube Shorts Publishing** | **PASS** | Production Ready | Verified title formatting, description source attribution, and resumable recovery. Documented dedicated ~100 uploads/day bucket. |
-| **Cloudflare Runtime** | **PASS** | Edge Worker Configured | Audited Next.js 16 / React 19 edge constraints. Implemented `src/server/worker.ts` with D1 binding and Cron execution. |
+| **Reel Submission Engine** | **PASS** | Production Ready | Live shortcode parsing, rights confirmation enforcement, and provider resolution chain verified. |
+| **Google OAuth 2.0** | **PASS** | Staging / Requires Cloud Verification | Tested code exchange, AES-256-GCM token encryption, and auto-refresh. Documented 7-day token expiration in Google "Testing" mode. |
+| **Google Drive Archival** | **PASS** | Production Ready | Tested 5.51 MB MP4 video streaming. Measured memory: bounded ~5.2 MB chunk buffer. Verified interrupted transfer recovery. |
+| **YouTube Shorts Publishing** | **PASS** | Production Ready | Verified title formatting (`#shorts`), description source attribution, and resumable recovery. Documented dedicated ~100 uploads/day bucket. |
+| **Cloudflare Runtime** | **PASS** | Edge Worker Configured | Serverless runtime in `src/server/worker.ts` with D1 binding, Cron trigger, and Reel submission routing. |
 | **Instagram Monitoring** | **LIMITATION PROVEN** | Permitted Probes Only | Proved unauthenticated web cannot extract Reels media without login bypass. Adapter honestly reports platform gating. |
 | **Media Pipeline Engine** | **PASS** | Production Ready | Mutex concurrency lock, Reel deduplication store, and status state machine verified. |
 
 ---
 
-## 4. Real Video & Memory Profile Audit
-
-- **Test Fixture**: Pure in-memory synthetic stream (`createInMemoryTestVideo(5510872)`)
-  - Exact file size: **5,510,872 bytes** (5.25 MB)
-  - MIME type: `video/mp4`
-  - MP4 container atoms: `ftyp` (size 24 bytes), major brand `mp42` (fully playable H.264/AAC)
-  - **Local SSD Usage**: **0 bytes**
-- **Memory Consumption Profile (Empirically Measured)**:
-  - Baseline Memory: RSS = **74 MB**, Heap Used = **11.0 MB**
-  - Streaming Active Memory: RSS = **115 MB**, Heap Used = **11.4 MB**
-  - Peak Heap Buffer Delta: **~1.0 MB**
-  - **Audit Conclusion**: Memory usage is strictly bounded. The application never loads the full 5.51 MB video into memory at once. It processes 5MB streaming slices via `Uint8Array`, allowing Node.js and Cloudflare Workers to safely stream arbitrarily large video files without exceeding memory limits.
-
----
-
-## 5. YouTube Quota Bucket & Ceiling Correction
-
-- **Correction**: YouTube Data API v3 enforces two separate limits:
-  1. **General Project Daily Quota**: 10,000 units/day (used by various API methods).
-  2. **Dedicated Video Upload Limit Bucket**: Default documented limit is **approximately 100 video upload calls per day** per project/channel.
-- **AutoShorts 5-Upload Ceiling**: The default configuration of `max_uploads_per_day = 5` is a configurable automation safety ceiling designed to prevent creator channels from being flagged by YouTube's algorithmic spam heuristics, pace Shorts publishing, and leave headroom in the upload bucket. It is NOT mathematically derived from 10,000 / 1,600.
-
----
-
-## 6. Google OAuth 7-Day Expiration & Verification Action Items
-
-- **The 7-Day Refresh Token Rule**: When a Google Cloud project's OAuth Consent Screen is set to **User Type: External** and **Publishing Status: Testing**, Google automatically expires all granted refresh tokens after **7 days** (168 hours).
-- **Required Action for Long-Running Production**:
-  1. For individual creator use on Google Workspace: Set **User Type: Internal** (refresh tokens never expire).
-  2. For external multi-user production: Submit project for **Google App Verification** (Publishing status -> In Production). Sensitive scopes (`youtube.upload`, `youtube.readonly`) require:
-     - Verified domain in Google Search Console.
-     - Public Privacy Policy URL and Terms of Service.
-     - YouTube API Services Compliance review with a video demonstration of OAuth consent.
-
----
-
-## 7. Instagram Monitoring Reality & Supported Alternatives
-
-- **Empirical Findings**:
-  - GET `https://www.instagram.com/<username>/`: Returns HTTP 200 with an unhydrated client-side React shell (`<div id="mount_0_0_..."></div>`) containing no server-side rendered media or video stream links.
-  - GET `https://www.instagram.com/api/v1/users/web_profile_info/`: Returns HTTP 404 or redirects to `/accounts/login/` with checkpoint requirements.
-  - Ephemeral media CDN URLs: Instagram video URLs on `cdninstagram.com` are signed with temporary tokens (`oh=...&oe=...`) and expire quickly.
-- **Supported Architectural Alternatives**:
-  1. **Official Meta Instagram Graph API**: For Creator / Business accounts with an associated Facebook Page. Provides verified webhooks on new post publication.
-  2. **Creator RSS / Syndication Feeds**: Creators configure an authorized syndication feed for automatic polling.
-  3. **Direct Creator Reel Submission**: Creators paste specific published Reel URLs into the dashboard, which are then processed through the archival and publishing pipeline.
-
----
-
-## 8. Automated Test & Build Evidence
+## 5. Automated Test & Build Evidence
 
 - **Unit & Integration Tests**: 12/12 suites passing (`npm test`).
 - **Production Readiness Audit**: 6/6 audit suites passing (`npm run test:audit`).
-- **All Tests Combined**: 18/18 tests passing (`npm run test:all`).
-- **Production Build**: Next.js 16.4.5 (Turbopack) build completed cleanly across 27 routes with 0 errors.
+- **Phase 3 Submission Engine Tests**: 6/6 test suites passing (`npm run test:phase3`).
+- **All Tests Combined**: **24/24 tests passing (100% OK)** (`npm run test:all`).
+- **TypeScript Check**: `npx tsc --noEmit` passed with 0 errors.
+- **Production Build**: Next.js 16.4.5 (Turbopack) build completed cleanly across 30 routes with 0 errors.
 - **Disk Cleanup**: Verified `npm run clean` successfully removes build artifacts.

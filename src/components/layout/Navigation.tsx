@@ -14,10 +14,12 @@ import {
   PlayCircle,
   ExternalLink,
   ShieldCheck,
+  Film,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
   { label: 'Dashboard', href: '/', icon: LayoutDashboard },
+  { label: 'Submit Reel', href: '/submit-reel', icon: Film },
   { label: 'Monitored Profiles', href: '/accounts', icon: Users },
   { label: 'Automation', href: '/automation', icon: Cpu },
   { label: 'Upload History', href: '/uploads', icon: History },

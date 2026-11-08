@@ -63,12 +63,19 @@ CREATE TABLE IF NOT EXISTS upload_jobs (
     caption TEXT,
     thumbnail_url TEXT,
     original_reel_url TEXT NOT NULL,
+    shortcode TEXT,
+    media_source_type TEXT DEFAULT 'PUBLIC_PROBE',
+    rights_confirmed INTEGER NOT NULL DEFAULT 0,
     drive_file_id TEXT,
     drive_file_url TEXT,
     youtube_video_id TEXT,
     youtube_video_url TEXT,
-    status TEXT NOT NULL DEFAULT 'DETECTED' CHECK (status IN (
-        'DETECTED', 'DOWNLOADING', 'STORED_DRIVE', 'UPLOADING_YOUTUBE', 'COMPLETED', 'FAILED', 'RETRYING'
+    status TEXT NOT NULL DEFAULT 'SUBMITTED' CHECK (status IN (
+        'SUBMITTED', 'VALIDATING', 'RESOLVING_MEDIA', 'MEDIA_AVAILABLE',
+        'WAITING_FOR_AUTHORIZED_MEDIA', 'ARCHIVING_TO_DRIVE', 'STORED_IN_DRIVE',
+        'UPLOADING_TO_YOUTUBE', 'VERIFYING_UPLOAD', 'COMPLETED', 'FAILED',
+        -- Legacy status aliases
+        'DETECTED', 'DOWNLOADING', 'STORED_DRIVE', 'RETRYING'
     )),
     error_details TEXT,
     retry_count INTEGER NOT NULL DEFAULT 0,

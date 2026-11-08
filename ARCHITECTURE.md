@@ -9,11 +9,13 @@ AutoShorts is designed for zero-maintenance, free-tier serverless cloud operatio
  ┌──────────────────────────────────────────────────────────────┐
  │                     Cloudflare Pages                         │
  │           Next.js 16 + React 19 Web Dashboard               │
+ │           - Dashboard, Profile Manager, Automation           │
+ │           - Primary Flow: Direct Reel URL Submission         │
  └──────────────────────────────┬───────────────────────────────┘
                                 │ REST API / Webhooks
  ┌──────────────────────────────▼───────────────────────────────┐
  │             Cloudflare Worker (src/server/worker.ts)         │
- │      - Monitoring Adapter Engine                             │
+ │      - Reel URL Extraction & MediaResolver Engine            │
  │      - Execution Mutex Concurrency Lock                      │
  │      - Pipeline Orchestrator (PipelineService)               │
  │      - D1 Database Client (env.DB)                           │
@@ -55,34 +57,40 @@ AutoShorts is designed for zero-maintenance, free-tier serverless cloud operatio
    - In-memory state with zero disk persistence is used as local/test fallback.
 3. **Remote Development & Execution**:
    - The canonical repository is hosted on **GitHub**.
-   - Remote development environments (such as **GitHub Codespaces**) are the preferred client to run dependency installs, compilation, tests, and builds without placing wear or storage load on local SSDs.
-4. **Antigravity Environment Reality**:
-   - When Antigravity executes in a local workspace, it must not download video assets, retain heavy build artifacts, or create persistent local media caches.
-   - Workspaces located inside cloud-sync folders (e.g. OneDrive) must be protected against disk churn and file lock conflicts (`EPERM`) by excluding build folders (`.next`, `.turbo`) from local sync.
-5. **Proactive Cleanup**:
+   - Standardized Dev Container configuration (`.devcontainer/devcontainer.json`) and GitHub Actions workflow (`.github/workflows/remote-verify.yml`) enable cloud dependency installation, TypeScript checks, and test execution in GitHub Codespaces with zero local SSD wear.
+4. **Proactive Cleanup**:
    - An automated cleanup tool (`npm run clean` -> `scripts/clean.js`) purges temporary build folders (`.next`, `out`, `.turbo`) safely.
    - *Note on Honest Reporting*: The policy targets near-zero project SSD usage; it does not claim literal absolute zero because operating systems and web browsers inherently maintain transient page caches and socket buffers.
 
 ---
 
-## 3. Instagram Monitoring Reality & Permitted Public Probing
+## 3. Instagram Reel Submission Engine & Media Resolution (Phase 3)
 
-### 3.1 The Technical Reality of Unauthenticated Instagram Web Access
-Standard HTTP GET requests to Instagram profile URLs:
-- Return HTTP 200 with an unhydrated client-side React shell (`<div id="mount_0_0_..."></div>`).
-- Meta does NOT perform server-side rendering (SSR) of media for unauthenticated users.
-- Internal endpoints (`/api/v1/users/web_profile_info/`) return HTTP 404 or redirect to login checkpoints when requested without active authenticated session cookies.
-- Direct video URLs (`cdninstagram.com`) are ephemeral and token-signed.
+### 3.1 Primary Workflow: Direct Reel URL Submission
+Rather than attempting fragile unauthenticated web scraping, AutoShorts places direct creator Reel URL submission at the center of the platform (`/submit-reel`).
 
-### 3.2 Anti-Bypass Compliance
-In accordance with our core policy:
-- No headless browser stealth tricks, CAPTCHA bypasses, or proxy rotation are used.
-- The monitoring adapter (`StandardPublicWebAdapter`) honestly registers `status_reason: "Profile page connected (HTTP 200). Ready for authorized media updates."` without fabricating media.
+### 3.2 Shortcode Extraction Engine (`extractReelShortcode`)
+- Parses canonical shortcodes (Base64url, 9-25 characters) across multiple URL formats:
+  - Standard: `https://www.instagram.com/reel/C3b4XyzABC1/`
+  - Reels Tab: `https://instagram.com/reels/C3b4XyzABC1/?igsh=...`
+  - Post URL: `https://www.instagram.com/p/C3b4XyzABC1/`
+  - Short URL: `https://instagr.am/reel/C3b4XyzABC1`
+  - Bare shortcode: `C3b4XyzABC1`
+- Normalizes all inputs to `https://www.instagram.com/reel/<shortcode>/`.
 
-### 3.3 Supported Production Alternatives
-1. **Meta Instagram Graph API**: Creator / Business accounts connected via Facebook Page. Supports webhooks on new post publication.
-2. **Creator RSS / Syndication Feeds**: Automated feed polling.
-3. **Creator Direct URL Submission**: Direct ingestion via dashboard.
+### 3.3 Provider-Independent Media Resolver (`MediaResolver`)
+Decouples media resolution through a prioritized provider chain:
+1. **UserDirectStreamProvider**: Connects user-provided direct video URLs or attached Google Drive video files.
+2. **CreatorAuthorizedUrlProvider**: Resolves creator-authorized CDN streams.
+3. **MetaGraphApiProvider**: Interfaces with official Meta Graph API when developer tokens are configured.
+4. **StandardPublicProbeProvider**:
+   - Strictly complies with anti-bypass rules (no stolen cookies, no CAPTCHA evasion, no scraping).
+   - Probes public URL reachability and oEmbed metadata.
+   - Honestly reports `WAITING_FOR_AUTHORIZED_MEDIA` when the raw MP4 binary is gated behind Instagram session authentication.
+5. **SandboxTestProvider**: Safe test fixtures for local and CI automated verification.
+
+### 3.4 Mandatory Copyright & Ownership Enforcement
+The submission engine enforces mandatory user confirmation of video ownership or authorized creator republishing rights (`confirmedRights: true`) before any job is accepted into the pipeline.
 
 ---
 
@@ -105,8 +113,8 @@ In accordance with our core policy:
 - **Chunked Transfer Protocol**: 5MB binary chunks (`uploadStreamChunk`) using HTTP range headers (`Content-Range: bytes START-END/TOTAL`) and HTTP 308 (Resume Incomplete).
 - **Bounded Memory Profile (Empirical Measurement)**:
   - Total video size: **5,510,872 bytes** (5.51 MB)
-  - Active streaming heap buffer delta: **~1.2 MB**
-  - RSS: 62 MB baseline -> 93 MB active streaming
+  - Active streaming heap buffer delta: **~1.0 MB**
+  - RSS: 57 MB baseline -> 99 MB active streaming
   - Zero whole-file RAM buffering: Only the active 5MB chunk is in memory at any given time. Zero bytes written to local SSD.
 - **Interruption Recovery**: Can query `queryResumableStatus(sessionUri, totalBytes)` with `bytes */total` to retrieve `Range: bytes=0-<lastByte>` and resume without restarting.
 - **Deduplication**: `checkFileExists` searches target folder before creating upload sessions.
@@ -124,34 +132,45 @@ In accordance with our core policy:
 
 ---
 
-## 7. End-to-End Pipeline State Machine
+## 7. Granular Pipeline State Machine
 
 ```
-[Profile Check] ──────► [Reel Detected]
-                              │
-                              ▼
-                      [Deduplication Check]
-                              │
-                    ┌─────────┴─────────┐
-             (Duplicate)             (New)
-                    │                   │
-                 [Skip]                 ▼
-                                  [DOWNLOADING] (In-Memory Stream)
-                                        │
-                                        ▼
-                                  [STORED_DRIVE] (Google Drive Cloud Archive)
-                                        │
-                                        ▼
-                              [UPLOADING_YOUTUBE] (Resumable Stream to Shorts)
-                                        │
-                               ┌────────┴────────┐
-                           (Success)          (Error)
-                               │                 │
-                               ▼                 ▼
-                          [COMPLETED]         [FAILED]
-                                                 │
-                                                 ▼
-                                            [RETRYING]
+[Reel Submission / Discovery]
+              │
+              ▼
+        [SUBMITTED]
+              │
+              ▼
+        [VALIDATING] (Shortcode format & deduplication)
+              │
+              ▼
+     [RESOLVING_MEDIA] (MediaResolver Provider Chain)
+              │
+     ┌────────┴──────────────────────────┐
+     │ (Raw MP4 Gated)                   │ (Media Resolved)
+     ▼                                   ▼
+[WAITING_FOR_AUTHORIZED_MEDIA]    [MEDIA_AVAILABLE]
+                                         │
+                                         ▼
+                                [ARCHIVING_TO_DRIVE] (5MB RAM chunk stream)
+                                         │
+                                         ▼
+                                 [STORED_IN_DRIVE] (Drive file ID persisted)
+                                         │
+                                         ▼
+                               [UPLOADING_TO_YOUTUBE] (Stream to Shorts)
+                                         │
+                                         ▼
+                                 [VERIFYING_UPLOAD]
+                                         │
+                                ┌────────┴────────┐
+                            (Success)          (Error)
+                                │                 │
+                                ▼                 ▼
+                           [COMPLETED]         [FAILED]
+                                                  │
+                                                  ▼
+                                             [RETRYING]
 ```
 
 - **Concurrency Lock**: Guaranteed via `acquireAutomationLock` / `releaseAutomationLock`.

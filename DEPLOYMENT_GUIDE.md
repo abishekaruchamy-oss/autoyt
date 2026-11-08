@@ -142,9 +142,10 @@ npx wrangler secret put TOKEN_ENCRYPTION_KEY
 ### 7.1 Remote Development Workflow (Recommended)
 1. **Host Canonical Code on GitHub**:
    - Push code to a remote GitHub repository.
-2. **Use GitHub Codespaces**:
-   - Open the repository in GitHub Codespaces or a remote cloud container.
-   - Run dependency installation (`npm install`), compilation (`npm run build`), test execution (`npm test`), and deployment (`wrangler deploy`) in the remote cloud environment.
+2. **Standardized Dev Container & GitHub Codespaces**:
+   - The repository includes `.devcontainer/devcontainer.json` preconfigured with Node.js 20 LTS, TypeScript, and port forwards for Next.js (`3000`) and Cloudflare Worker runtime (`8787`).
+   - GitHub Actions (`.github/workflows/remote-verify.yml`) automatically executes remote verification (TypeScript checks, 24 test suites, and Next.js build) upon push.
+   - Run dependency installation (`npm install`), compilation (`npm run build`), test execution (`npm test`), and deployment (`wrangler deploy`) directly in GitHub Codespaces.
    - The user's laptop is used strictly as a browser client, placing **zero build artifact or cache load on the local SSD**.
 
 ### 7.2 Local Development with Antigravity
