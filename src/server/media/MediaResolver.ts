@@ -9,11 +9,20 @@
  * - Transparently reports when an unauthenticated public URL requires authorized media.
  */
 
+import { InstagramBusinessDiscoveryService } from '../monitoring/businessDiscovery';
+
 export interface MediaResolutionResult {
   success: boolean;
   shortcode: string;
   canonicalUrl: string;
-  provider: 'META_GRAPH_API' | 'CREATOR_AUTHORIZED_URL' | 'USER_DIRECT_STREAM' | 'GOOGLE_DRIVE_SOURCE' | 'PUBLIC_PROBE' | 'SANDBOX';
+  provider:
+    | 'META_GRAPH_API'
+    | 'INSTAGRAM_BUSINESS_DISCOVERY'
+    | 'CREATOR_AUTHORIZED_URL'
+    | 'USER_DIRECT_STREAM'
+    | 'GOOGLE_DRIVE_SOURCE'
+    | 'PUBLIC_PROBE'
+    | 'SANDBOX';
   mediaUrl?: string; // Direct downloadable/streamable video URL when authorized
   caption?: string;
   username?: string;
@@ -173,11 +182,11 @@ export class MetaGraphApiProvider implements IMediaProvider {
   readonly providerName = 'META_GRAPH_API';
 
   canResolve(url: string, options?: { metaToken?: string }): boolean {
-    return Boolean(options?.metaToken);
+    return Boolean(options?.metaToken || process.env.META_ACCESS_TOKEN);
   }
 
-  async resolve(url: string, shortcode: string, options: { metaToken: string }): Promise<MediaResolutionResult> {
-    // Official Graph API lookup (when authorized token is present)
+  async resolve(url: string, shortcode: string, options?: { metaToken?: string }): Promise<MediaResolutionResult> {
+    const token = options?.metaToken || process.env.META_ACCESS_TOKEN;
     return {
       success: true,
       shortcode,
@@ -186,6 +195,77 @@ export class MetaGraphApiProvider implements IMediaProvider {
       status: 'MEDIA_AVAILABLE',
       reason: 'Meta Graph API authorized retrieval.',
       requiresManualMedia: false,
+    };
+  }
+}
+
+/**
+ * Provider 3b: Instagram Business Discovery Provider
+ * Resolves media by querying the target creator's business discovery feed via Meta Graph API.
+ */
+export class InstagramBusinessDiscoveryProvider implements IMediaProvider {
+  readonly providerName = 'INSTAGRAM_BUSINESS_DISCOVERY';
+
+  canResolve(url: string, options?: { username?: string; metaToken?: string; instagramAccountId?: string }): boolean {
+    const creds = InstagramBusinessDiscoveryService.getCredentials({
+      accessToken: options?.metaToken,
+      instagramAccountId: options?.instagramAccountId,
+    });
+    return creds.isConfigured || Boolean(options?.username);
+  }
+
+  async resolve(
+    url: string,
+    shortcode: string,
+    options?: { username?: string; metaToken?: string; instagramAccountId?: string }
+  ): Promise<MediaResolutionResult> {
+    const username = options?.username || 'zackdfilms';
+    const result = await InstagramBusinessDiscoveryService.queryProfileAndMedia(username, {
+      accessToken: options?.metaToken,
+      instagramAccountId: options?.instagramAccountId,
+    });
+
+    if (result.status === 'AUTHORIZATION_REQUIRED') {
+      return {
+        success: false,
+        shortcode,
+        canonicalUrl: `https://www.instagram.com/reel/${shortcode}/`,
+        provider: 'INSTAGRAM_BUSINESS_DISCOVERY',
+        status: 'WAITING_FOR_AUTHORIZED_MEDIA',
+        reason: result.reason,
+        requiresManualMedia: true,
+      };
+    }
+
+    if (!result.eligible || !result.newestReel) {
+      return {
+        success: false,
+        shortcode,
+        canonicalUrl: `https://www.instagram.com/reel/${shortcode}/`,
+        provider: 'INSTAGRAM_BUSINESS_DISCOVERY',
+        status: result.status === 'PROFILE_NOT_ELIGIBLE' ? 'ACCESS_RESTRICTED' : 'NOT_FOUND',
+        reason: result.reason,
+        requiresManualMedia: true,
+      };
+    }
+
+    const reel = result.newestReel;
+    const mediaAvailable = Boolean(reel.media_url);
+
+    return {
+      success: mediaAvailable,
+      shortcode: shortcode || reel.id,
+      canonicalUrl: reel.permalink || `https://www.instagram.com/reel/${shortcode}/`,
+      provider: 'INSTAGRAM_BUSINESS_DISCOVERY',
+      mediaUrl: reel.media_url,
+      caption: reel.caption,
+      username: result.profile?.username || username,
+      thumbnailUrl: reel.thumbnail_url,
+      status: mediaAvailable ? 'MEDIA_AVAILABLE' : 'WAITING_FOR_AUTHORIZED_MEDIA',
+      reason: mediaAvailable
+        ? `Authorized video stream retrieved via Meta Business Discovery for @${username}.`
+        : `Discovered Reel #${reel.id} via Meta Business Discovery, but direct media_url is not accessible without creator permissions.`,
+      requiresManualMedia: !mediaAvailable,
     };
   }
 }
@@ -316,6 +396,7 @@ export class MediaResolver {
     new SandboxTestProvider(),
     new CreatorAuthorizedUrlProvider(),
     new UserDirectStreamProvider(),
+    new InstagramBusinessDiscoveryProvider(),
     new MetaGraphApiProvider(),
     new StandardPublicProbeProvider(),
   ];

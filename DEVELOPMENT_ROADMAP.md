@@ -112,6 +112,24 @@
 
 ---
 
+## Live Experiment: Official Instagram Business Discovery (@zackdfilms) (Completed)
+- [x] **Step 1: Codebase Inspection**: Reviewed `MediaResolver.ts`, D1 schema, and Cloudflare Worker Cron.
+- [x] **Step 2: Meta Business Discovery Implementation**:
+  - Implemented `InstagramBusinessDiscoveryService` and `InstagramBusinessDiscoveryAdapter` (`src/server/monitoring/businessDiscovery.ts`).
+  - Added `InstagramBusinessDiscoveryProvider` to `MediaResolver.ts`.
+  - Integrated with `PipelineService.runSync` for automated profile checking.
+- [x] **Step 3: Actual Reel Retrieval Engine**:
+  - Implemented `validateAndStreamMedia`: checks HTTP status, Content-Type, Content-Length, and validates MP4 box atoms (`ftyp`, `mp42`) with zero local SSD writes.
+  - Strict fallback to `WAITING_FOR_AUTHORIZED_MEDIA` when media is gated.
+- [x] **Step 4: Background Monitoring Registration**:
+  - Registered `@zackdfilms` as active source in database.
+  - Verified Cloudflare Worker Cron scheduled handler compatibility.
+- [x] **Step 5 & 6: Automated Test Suite & Security**:
+  - Created `tests/first-live-experiment-zackdfilms.ts` (`npm run test:experiment`).
+  - Proved zero disk writes, 0.42 MB memory delta, and detailed Meta credential prerequisites without requesting plaintext secrets.
+
+---
+
 ## Phase 4: Live Cloud Operations & Deployment Execution (Next Step)
 - [ ] Connect live Google Cloud OAuth credentials in Cloudflare Secrets (`wrangler secret put`).
 - [ ] Initialize live Cloudflare D1 database (`npx wrangler d1 execute autoshorts-db --file=db/d1-schema.sql`).

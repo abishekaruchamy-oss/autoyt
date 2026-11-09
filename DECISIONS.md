@@ -63,3 +63,8 @@
 - **Context**: Moving from a binary "DETECTED" vs "COMPLETED" state to a multi-stage streaming pipeline required visibility into individual intermediate stages.
 - **Decision**: Expand `JobStatus` to include `SUBMITTED`, `VALIDATING`, `RESOLVING_MEDIA`, `MEDIA_AVAILABLE`, `WAITING_FOR_AUTHORIZED_MEDIA`, `ARCHIVING_TO_DRIVE`, `STORED_IN_DRIVE`, `UPLOADING_TO_YOUTUBE`, `VERIFYING_UPLOAD`, `COMPLETED`, and `FAILED`.
 - **Consequences**: Real-time observability on both the dashboard and worker cron, clear user messaging, and deterministic retry handling.
+
+## ADR-014: Official Meta Business Discovery Architecture for Profile Monitoring
+- **Context**: Monitoring creator profiles like `@zackdfilms` unauthenticated via HTTP GET returns an unhydrated React client shell (HTTP 200) without raw video binaries. Attempting to bypass login walls violates terms of service.
+- **Decision**: Implement official Meta Graph API Business Discovery (`GET /{ig_user_id}?fields=business_discovery.username({username}){media{...}}`). The app authenticates via an authorized professional monitoring account and queries target accounts. When credentials are not configured or media is gated, it cleanly transitions to `AUTHORIZATION_REQUIRED` or `WAITING_FOR_AUTHORIZED_MEDIA`.
+- **Consequences**: Fully compliant with Meta platform policies; zero scraping or proxy rotation; handles both Business and Creator accounts cleanly.

@@ -5,6 +5,10 @@ import {
   ReelDeduplicationStore,
   formatCaptionForYouTube,
 } from '../monitoring/adapter';
+import {
+  InstagramBusinessDiscoveryAdapter,
+  InstagramBusinessDiscoveryService,
+} from '../monitoring/businessDiscovery';
 import { GoogleDriveService } from './googleDriveService';
 import { YouTubeService } from './youtubeService';
 import { getValidAccessToken, isGoogleConnected } from './googleAuthService';
@@ -116,8 +120,11 @@ export class PipelineService {
         }
       }
 
+      const metaCreds = InstagramBusinessDiscoveryService.getCredentials();
       const adapter = options?.sandbox
         ? new PermittedSandboxAdapter()
+        : metaCreds.isConfigured
+        ? new InstagramBusinessDiscoveryAdapter()
         : new StandardPublicWebAdapter();
 
       // 4. Process each profile

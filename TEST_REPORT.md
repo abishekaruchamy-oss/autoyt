@@ -33,6 +33,7 @@ The test suites are organized into **Unit Tests**, **Public Profile Lifecycle Te
 | **Phase 3.1 Media** | Real Creator CDN Stream Retrieval | **PASS** | 2026-11-08 | 5,510,872 bytes (5.51 MB) verified via HEAD request |
 | **Phase 3.1 Media** | Real Instagram Unauthenticated Probe | **PASS** | 2026-11-08 | Honestly returns `WAITING_FOR_AUTHORIZED_MEDIA` without access bypass |
 | **Phase 3.1 Live** | Google OAuth Credential Detection | **PASS** | 2026-11-08 | Runner checks real credentials, awaiting user OAuth authorization |
+| **Live Experiment** | Meta Business Discovery & @zackdfilms Probe | **PASS** | 2026-11-09 | Public HTTP 200, credential detection, MP4 streaming validator, Cron handler verified |
 | **Production Build** | Next.js 16.4.5 App Router Build | **PASS** | 2026-11-08 | 30 static and dynamic routes compiled with 0 errors |
 
 ---
