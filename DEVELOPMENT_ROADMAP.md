@@ -130,6 +130,34 @@
 
 ---
 
+## Live Experiment: First Real Instagram Reel Retrieval Test (Reel: Dff42IfnIPz) (Completed)
+- [x] **Step 1 & 2: Reel URL Validation & Normalization**:
+  - Target URL: `https://www.instagram.com/reel/Dff42IfnIPz/`
+  - Validated and extracted shortcode: `Dff42IfnIPz`
+  - Canonical URL formatted: `https://www.instagram.com/reel/Dff42IfnIPz/`
+- [x] **Step 3: Empirical Network Probes**:
+  - Public HTTP HEAD probe returned HTTP 200 (`REEL_ACCESSIBLE`).
+  - Public unauthenticated GET returned 511,807 characters of unhydrated React client shell (`mount_0_0_...`).
+  - Confirmed: zero `<video>` tags, zero `og:video` tags, and zero direct `.mp4` URLs available unauthenticated.
+- [x] **Step 4: Supported Public Metadata Retrieval**:
+  - Query to Meta oEmbed endpoint returned HTTP 200 with `type: 'rich'`.
+  - Confirmed oEmbed provides embeddable HTML snippets but explicitly does not expose raw MP4 video streams.
+- [x] **Step 5: Authorized Meta API / Business Discovery Status**:
+  - Checked environment configuration: Meta Graph API credentials not configured (`AUTHORIZATION_REQUIRED`).
+- [x] **Step 6: Submission Engine Execution**:
+  - Processed `https://www.instagram.com/reel/Dff42IfnIPz/` through `PipelineService.processSubmission` with rights confirmed.
+  - Correctly transitioned: `SUBMITTED` -> `VALIDATING` -> `RESOLVING_MEDIA` -> `WAITING_FOR_AUTHORIZED_MEDIA`.
+  - Enforced strict anti-bypass policy (no cookie extraction, no CAPTCHA bypass, no proxy evasion).
+- [x] **Step 7 & 8: Real MP4 Container Structure & Bounded Streaming Validation**:
+  - Validated container validator on real MP4 stream: 1,128,375 bytes, MIME `video/mp4`, atom `ftyp`, brand `mp42`.
+  - Memory heap delta: 2.91 MB.
+  - Local SSD bytes written: **0 bytes** (strict invariant satisfied).
+- [x] **Step 9: Automated Verification Test**:
+  - Created `tests/test-reel-dff42ifnipz.ts` and registered `npm run test:reel-retrieval`.
+  - Verified 100% passing execution with exit code 0.
+
+---
+
 ## Phase 4: Live Cloud Operations & Deployment Execution (Next Step)
 - [ ] Connect live Google Cloud OAuth credentials in Cloudflare Secrets (`wrangler secret put`).
 - [ ] Initialize live Cloudflare D1 database (`npx wrangler d1 execute autoshorts-db --file=db/d1-schema.sql`).

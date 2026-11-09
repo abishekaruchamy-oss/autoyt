@@ -13,6 +13,7 @@
     "test:media": "tsx tests/phase3-1-media-retrieval.ts",
     "test:live": "tsx tests/phase3-1-live-pipeline.ts",
     "test:experiment": "tsx tests/first-live-experiment-zackdfilms.ts",
+    "test:reel-retrieval": "tsx tests/test-reel-dff42ifnipz.ts",
     "test:all": "tsx tests/test-suite.ts && tsx tests/production-readiness-audit.ts && tsx tests/phase3-submission-engine.ts",
     "clean": "node scripts/clean.js"
   },
