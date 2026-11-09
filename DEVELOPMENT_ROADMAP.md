@@ -158,6 +158,33 @@
 
 ---
 
+## Phase 3.4: ReClip / yt-dlp Integration Experiment (Target: Dff42IfnIPz) (Completed)
+- [x] **Step 1: Inspect ReClip Architecture & yt-dlp**:
+  - Inspected `averygan/reclip`: README, `app.py`, `requirements.txt`.
+  - Analyzed filesystem behavior: ReClip defaults to writing local files in `downloads/`, conflicting with the zero-SSD mandate.
+  - Inspected yt-dlp's Instagram extractor capabilities (v2026.10.26).
+- [x] **Step 2 & 3: Isolated Experiment on Target Reel Dff42IfnIPz**:
+  - Ran empirical extraction test in non-download mode (`--no-playlist -j`).
+  - Extractor: `Instagram`. HTTP Response: 200 (Success).
+  - Metadata: Title `"Video by zackdfilms"`, Caption `"How This Bug Disappears In A Blink 🧐"`, Uploader `"Zack D. Films"`.
+  - Stream: Resolved direct progressive MP4 stream.
+  - Video Bytes Streamed: **11,123,069 bytes** (10.61 MB) in memory.
+  - Container Validated: Atom `ftyp`, Brand `isom`, MIME `video/mp4`.
+  - Auth required: None (no stolen cookies or bypasses).
+  - Local SSD Bytes Written: **0 bytes**.
+- [x] **Step 4: Adapt for AutoShorts Architecture**:
+  - Built `src/server/media/reclipProvider.ts` with `ReClipYtDlpProvider`.
+  - Integrated into `MediaResolver` provider chain.
+  - Zero disk downloads: streams directly to Google Drive and YouTube Shorts via 5MB bounded chunks.
+  - Masked signed CDN tokens in logs.
+- [x] **Step 5: Background & Cloud Operation**:
+  - Added support for remote microservice (`RECLIP_SERVICE_URL`) for serverless/edge runtimes.
+- [x] **Step 6 & 7: 6-Stage Result Classification & Automated Test Suite**:
+  - Created `tests/phase3-4-reclip-ytdlp.ts` (`npm run test:reclip`).
+  - Verified 6/6 stages passing: Extractor initialized, Metadata extracted, Stream resolved, MP4 bytes retrieved (11.12 MB), Cloud stream verified, Drive upload pipeline integrated.
+
+---
+
 ## Phase 4: Live Cloud Operations & Deployment Execution (Next Step)
 - [ ] Connect live Google Cloud OAuth credentials in Cloudflare Secrets (`wrangler secret put`).
 - [ ] Initialize live Cloudflare D1 database (`npx wrangler d1 execute autoshorts-db --file=db/d1-schema.sql`).

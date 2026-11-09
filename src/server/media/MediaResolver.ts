@@ -10,6 +10,7 @@
  */
 
 import { InstagramBusinessDiscoveryService } from '../monitoring/businessDiscovery';
+import { ReClipYtDlpProvider } from './reclipProvider';
 
 export interface MediaResolutionResult {
   success: boolean;
@@ -21,6 +22,7 @@ export interface MediaResolutionResult {
     | 'CREATOR_AUTHORIZED_URL'
     | 'USER_DIRECT_STREAM'
     | 'GOOGLE_DRIVE_SOURCE'
+    | 'RECLIP_YT_DLP'
     | 'PUBLIC_PROBE'
     | 'SANDBOX';
   mediaUrl?: string; // Direct downloadable/streamable video URL when authorized
@@ -398,6 +400,7 @@ export class MediaResolver {
     new UserDirectStreamProvider(),
     new InstagramBusinessDiscoveryProvider(),
     new MetaGraphApiProvider(),
+    new ReClipYtDlpProvider(),
     new StandardPublicProbeProvider(),
   ];
 
@@ -412,6 +415,7 @@ export class MediaResolver {
       confirmedRights?: boolean;
       metaToken?: string;
       sandbox?: boolean;
+      disableYtDlp?: boolean;
     }
   ): Promise<MediaResolutionResult> {
     const extraction = extractReelShortcode(inputUrl);
