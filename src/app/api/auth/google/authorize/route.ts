@@ -3,7 +3,7 @@ import { getGoogleAuthUrl } from '@/server/services/googleAuthService';
 import { Repository } from '@/server/db/repository';
 
 export async function GET(request: NextRequest) {
-  const redirectUri = `${request.nextUrl.origin}/api/auth/google/callback`;
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI || `${request.nextUrl.origin}/api/auth/google/callback`;
 
   try {
     const { url, state } = getGoogleAuthUrl(redirectUri);

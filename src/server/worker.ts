@@ -152,7 +152,7 @@ export default {
 
       // 5. Google OAuth Endpoints
       if (path === '/api/auth/google/authorize') {
-        const redirectUri = `${url.origin}/api/auth/google/callback`;
+        const redirectUri = process.env.GOOGLE_REDIRECT_URI || `${url.origin}/api/auth/google/callback`;
         const { url: authUrl, state } = getGoogleAuthUrl(redirectUri);
         await Repository.saveOAuthState(state, redirectUri);
         return Response.redirect(authUrl, 302);
@@ -171,7 +171,7 @@ export default {
         if (!isValid) {
           return new Response(JSON.stringify({ error: 'Invalid or expired CSRF OAuth state' }), { status: 403, headers: jsonHeaders });
         }
-        const redirectUri = `${url.origin}/api/auth/google/callback`;
+        const redirectUri = process.env.GOOGLE_REDIRECT_URI || `${url.origin}/api/auth/google/callback`;
         const tokens = await exchangeCodeForTokens(code, redirectUri);
         await saveGoogleCredentials(tokens);
         return Response.redirect(`${url.origin}/settings?google_auth=success`, 302);

@@ -310,7 +310,15 @@ export class PipelineService {
       throw new Error(`Upload job ${jobId} not found.`);
     }
 
-    if (job.status === 'COMPLETED') {
+    if (job.status === 'COMPLETED' || job.youtube_video_id) {
+      if (job.status !== 'COMPLETED') {
+        return (
+          (await Repository.updateUploadJob(jobId, {
+            status: 'COMPLETED',
+            error_details: null,
+          })) || job
+        );
+      }
       return job;
     }
 
@@ -414,12 +422,16 @@ export class PipelineService {
 
     // 3. Deduplication Check
     const existing = await Repository.getUploadJobByShortcode(shortcode);
+    const isRecorded = await Repository.isReelRecorded(`reel_${shortcode}`);
+
     if (existing) {
       if (
         existing.status === 'COMPLETED' ||
         existing.status === 'STORED_IN_DRIVE' ||
         existing.status === 'ARCHIVING_TO_DRIVE' ||
-        existing.status === 'UPLOADING_TO_YOUTUBE'
+        existing.status === 'UPLOADING_TO_YOUTUBE' ||
+        existing.youtube_video_id ||
+        isRecorded
       ) {
         return existing;
       }
@@ -576,6 +588,10 @@ export class PipelineService {
         completed_at: new Date().toISOString(),
         error_details: null,
       });
+
+      // Record in durable deduplication store
+      await Repository.recordReel(`reel_${shortcode}`, undefined, payload.reelUrl);
+      ReelDeduplicationStore.recordReel(`reel_${shortcode}`);
 
       await Repository.logActivity(
         'YOUTUBE_UPLOAD',

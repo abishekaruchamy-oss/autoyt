@@ -87,7 +87,7 @@ export class YouTubeService {
         categoryId: '22', // People & Blogs
       },
       status: {
-        privacyStatus: metadata.privacyStatus || 'public',
+        privacyStatus: metadata.privacyStatus || 'private',
         selfDeclaredMadeForKids: false,
         embeddable: true,
       },
@@ -273,7 +273,7 @@ export class YouTubeService {
       videoId,
       videoUrl: `https://youtube.com/shorts/${videoId}`,
       title,
-      privacyStatus: metadata.privacyStatus || 'public',
+      privacyStatus: metadata.privacyStatus || 'private',
       publishedAt: new Date().toISOString(),
     };
   }

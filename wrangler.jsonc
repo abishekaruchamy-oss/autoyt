@@ -17,7 +17,6 @@
     ]
   },
   "vars": {
-    "NEXT_PUBLIC_APP_URL": "https://autoshorts.workers.dev",
     "STORAGE_DEFAULT_FOLDER": "Instagram Reels Backup",
     "POLLING_INTERVAL_MINUTES": "30"
   },
