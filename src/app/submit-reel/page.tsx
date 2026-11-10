@@ -49,8 +49,8 @@ export default function SubmitReelPage() {
   const fetchJobs = useCallback(async () => {
     try {
       const res = await fetch('/api/reels');
-      const data = await res.json();
-      if (data.success) {
+      const data = (await res.json()) as { success: boolean; jobs?: UploadJob[] };
+      if (data.success && data.jobs) {
         setJobs(data.jobs);
       }
     } catch (err) {
@@ -98,7 +98,12 @@ export default function SubmitReelPage() {
         }),
       });
 
-      const data = await res.json();
+      const data = (await res.json()) as {
+        success: boolean;
+        message?: string;
+        error?: string;
+        job?: UploadJob;
+      };
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Failed to submit Reel');
       }
@@ -128,7 +133,7 @@ export default function SubmitReelPage() {
   const handleRetry = async (jobId: string) => {
     try {
       const res = await fetch(`/api/uploads/${jobId}/retry`, { method: 'POST' });
-      const data = await res.json();
+      const data = (await res.json()) as { success: boolean; error?: string };
       if (data.success) {
         await fetchJobs();
       }

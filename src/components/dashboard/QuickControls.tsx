@@ -31,7 +31,7 @@ export function QuickControls({ automation, onUpdate }: QuickControlsProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ is_enabled: !automation.is_enabled }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as { success: boolean; error?: string };
       if (data.success) {
         onUpdate();
       }
@@ -46,7 +46,7 @@ export function QuickControls({ automation, onUpdate }: QuickControlsProps) {
     try {
       setSyncing(true);
       const res = await fetch('/api/automation/sync-now', { method: 'POST' });
-      const data = await res.json();
+      const data = (await res.json()) as { success: boolean; error?: string };
       if (data.success) {
         onUpdate();
       } else {

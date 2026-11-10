@@ -50,13 +50,16 @@ export async function GET(request: NextRequest) {
     tokenUrl.searchParams.set('code', code);
 
     const tokenRes = await fetch(tokenUrl.toString());
-    const tokenData = await tokenRes.json();
+    const tokenData = (await tokenRes.json()) as { access_token?: string; error?: { message?: string } };
 
     if (!tokenRes.ok || tokenData.error) {
       throw new Error(tokenData.error?.message || 'Token exchange failed');
     }
 
     const shortLivedToken = tokenData.access_token;
+    if (!shortLivedToken) {
+      throw new Error('No access token returned in exchange');
+    }
 
     // 2. Exchange short-lived token for long-lived token (60-day expiry)
     const longLivedUrl = new URL('https://graph.facebook.com/v19.0/oauth/access_token');
@@ -66,7 +69,7 @@ export async function GET(request: NextRequest) {
     longLivedUrl.searchParams.set('fb_exchange_token', shortLivedToken);
 
     const longLivedRes = await fetch(longLivedUrl.toString());
-    const longLivedData = await longLivedRes.json();
+    const longLivedData = (await longLivedRes.json()) as { access_token?: string; expires_in?: number };
 
     const finalToken = longLivedData.access_token || shortLivedToken;
     const expiresInSeconds = longLivedData.expires_in || 60 * 24 * 60 * 60;
@@ -75,7 +78,17 @@ export async function GET(request: NextRequest) {
     const meRes = await fetch(
       `https://graph.facebook.com/v19.0/me/accounts?fields=instagram_business_account{id,username,name,profile_picture_url}&access_token=${finalToken}`
     );
-    const meData = await meRes.json();
+    interface InstagramMeResponse {
+      data?: Array<{
+        instagram_business_account?: {
+          id: string;
+          username: string;
+          name?: string;
+          profile_picture_url?: string;
+        };
+      }>;
+    }
+    const meData = (await meRes.json()) as InstagramMeResponse;
 
     const igAccount = meData.data?.[0]?.instagram_business_account;
     if (!igAccount) {

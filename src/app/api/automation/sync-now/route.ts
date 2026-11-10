@@ -7,7 +7,7 @@ export async function POST(request: NextRequest) {
     let profileId: string | undefined;
 
     try {
-      const body = await request.json();
+      const body = (await request.json()) as { sandbox?: boolean; profileId?: string };
       sandbox = !!body.sandbox;
       profileId = body.profileId;
     } catch {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Repository } from '@/server/db/repository';
+import { MonitoredProfile } from '@/types';
 
 export async function GET(
   request: NextRequest,
@@ -29,7 +30,7 @@ export async function PATCH(
 ) {
   try {
     const { id } = await context.params;
-    const body = await request.json();
+    const body = (await request.json()) as Partial<MonitoredProfile>;
     const updated = await Repository.updateMonitoredProfile(id, body);
     if (!updated) {
       return NextResponse.json(

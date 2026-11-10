@@ -14,6 +14,7 @@ import { YouTubeService } from './youtubeService';
 import { getValidAccessToken, isGoogleConnected } from './googleAuthService';
 import { MonitoredProfile, UploadJob, DiscoveredReel, ReelSubmissionPayload } from '@/types';
 import { extractReelShortcode, MediaResolver } from '../media/MediaResolver';
+import { encryptToken, decryptToken } from '@/lib/crypto';
 
 export interface PipelineSyncOptions {
   profileId?: string;
@@ -144,29 +145,18 @@ export class PipelineService {
         result.reelsDetected += discovery.new_reels.length;
 
         for (const reel of discovery.new_reels) {
-          // Durable Deduplication across database and cache
+          // Durable Deduplication across database and cache (with orphan crash recovery)
           const alreadySeen =
-            (await Repository.isReelRecorded(reel.reel_id)) ||
+            (await Repository.isReelRecorded(reel.reel_id, { allowOrphanRecovery: true })) ||
             ReelDeduplicationStore.hasBeenSeen(reel.reel_id);
           if (alreadySeen) {
             result.details.push(`Skipping already-seen Reel: ${reel.reel_id}`);
             continue;
           }
 
-          // Register in durable deduplication store
-          await Repository.recordReel(reel.reel_id, profile.id, reel.permalink);
+          // Atomically register in durable deduplication store and queue initial upload job
+          const job = await Repository.registerDiscoveredReel(reel, profile);
           ReelDeduplicationStore.recordReel(reel.reel_id, profile.id);
-
-          // Create upload job record
-          const job = await Repository.addUploadJob({
-            reel_id: reel.reel_id,
-            instagram_account_id: profile.id,
-            account_username: profile.username,
-            caption: reel.caption,
-            thumbnail_url: reel.thumbnail_url,
-            original_reel_url: reel.permalink,
-            status: 'DETECTED',
-          });
 
           await Repository.logActivity(
             'REEL_DETECTED',
@@ -270,35 +260,70 @@ export class PipelineService {
       { fileId: driveResult.fileId, fileName: driveFileName }
     );
 
-    // Step 2: YouTube Shorts Streaming Publication
+    // Step 2: YouTube Shorts Streaming Publication via authenticated Drive backup
     await Repository.updateUploadJob(jobId, { status: 'UPLOADING_TO_YOUTUBE' });
 
-    const ytResult = await YouTubeService.streamVideoToYouTube(
-      reel.video_source_url,
-      {
-        caption: reel.caption,
+    const driveStreamUrl = GoogleDriveService.getMediaDownloadUrl(driveResult.fileId);
+    const driveHeaders = GoogleDriveService.getAuthHeaders(accessToken);
+
+    try {
+      const ytResult = await YouTubeService.streamVideoToYouTube(
+        driveStreamUrl,
+        {
+          caption: reel.caption,
+          username,
+          privacyStatus: defaultVisibility,
+        },
+        accessToken,
+        {
+          sourceHeaders: driveHeaders,
+          onSessionInitiated: async (sessionUri) => {
+            const enc = sessionUri ? encryptToken(sessionUri) : null;
+            await Repository.updateUploadJob(jobId, {
+              encrypted_youtube_upload_session_uri: enc,
+            });
+          },
+        }
+      );
+
+      const completedJob = await Repository.updateUploadJob(jobId, {
+        status: 'COMPLETED',
+        youtube_video_id: ytResult.videoId,
+        youtube_video_url: ytResult.videoUrl,
+        encrypted_youtube_upload_session_uri: ytResult.sessionUri ? encryptToken(ytResult.sessionUri) : null,
+        completed_at: new Date().toISOString(),
+        error_details: null,
+      });
+
+      await Repository.logActivity(
+        'YOUTUBE_UPLOAD',
+        `Published YouTube Short: "${ytResult.title}"`,
         username,
-        privacyStatus: defaultVisibility,
-      },
-      accessToken
-    );
+        { videoId: ytResult.videoId, videoUrl: ytResult.videoUrl, visibility: defaultVisibility }
+      );
 
-    const completedJob = await Repository.updateUploadJob(jobId, {
-      status: 'COMPLETED',
-      youtube_video_id: ytResult.videoId,
-      youtube_video_url: ytResult.videoUrl,
-      completed_at: new Date().toISOString(),
-      error_details: null,
-    });
+      return completedJob!;
+    } catch (err: any) {
+      const errMsg = err.message || String(err);
+      const sessionUri = err.sessionUri;
+      const status = sessionUri ? 'AMBIGUOUS_UPLOAD' : 'FAILED';
+      const enc = sessionUri ? encryptToken(sessionUri) : null;
 
-    await Repository.logActivity(
-      'YOUTUBE_UPLOAD',
-      `Published YouTube Short: "${ytResult.title}"`,
-      username,
-      { videoId: ytResult.videoId, videoUrl: ytResult.videoUrl, visibility: defaultVisibility }
-    );
+      await Repository.updateUploadJob(jobId, {
+        status,
+        encrypted_youtube_upload_session_uri: enc,
+        error_details: errMsg,
+      });
 
-    return completedJob!;
+      await Repository.logActivity(
+        'UPLOAD_FAILED',
+        `YouTube upload failed (${status}) for reel on @${username}: ${errMsg}`,
+        username,
+        { error: errMsg }
+      );
+
+      throw err;
+    }
   }
 
   /**
@@ -325,6 +350,8 @@ export class PipelineService {
     const accessToken = await getValidAccessToken();
     const automation = await Repository.getAutomationSettings();
 
+    let currentSessionUri: string | undefined = undefined;
+
     try {
       await Repository.updateUploadJob(jobId, {
         status: 'RETRYING',
@@ -332,18 +359,71 @@ export class PipelineService {
         error_details: null,
       });
 
-      // Need video stream source (either from original Reel or Drive backup)
-      const videoSource = job.original_reel_url;
+      // 1. YouTube Resumable Reconciliation Check:
+      // If an encrypted session URI is saved, decrypt it and check whether YouTube already received the complete video!
+      if (job.encrypted_youtube_upload_session_uri) {
+        try {
+          currentSessionUri = decryptToken(job.encrypted_youtube_upload_session_uri);
+        } catch (decryptErr) {
+          console.warn(`[Retry] Failed to decrypt session URI for job ${jobId}; discarding invalid session.`);
+        }
+      }
 
-      // If already stored on Drive, proceed straight to YouTube
-      if (!job.drive_file_id) {
+      if (currentSessionUri) {
+        try {
+          let totalBytes = 0;
+          if (job.drive_file_id) {
+            const meta = await GoogleDriveService.getFileMetadata(job.drive_file_id, accessToken);
+            totalBytes = meta.sizeBytes;
+          }
+          if (totalBytes > 0) {
+            const resumableStatus = await YouTubeService.queryResumableStatus(
+              currentSessionUri,
+              totalBytes
+            );
+            if (resumableStatus.isComplete && resumableStatus.videoId) {
+              const completedJob = await Repository.updateUploadJob(jobId, {
+                status: 'COMPLETED',
+                youtube_video_id: resumableStatus.videoId,
+                youtube_video_url:
+                  resumableStatus.videoUrl ||
+                  `https://youtube.com/shorts/${resumableStatus.videoId}`,
+                completed_at: new Date().toISOString(),
+                error_details: null,
+              });
+
+              await Repository.recordReel(job.reel_id, job.instagram_account_id, job.original_reel_url);
+              await Repository.logActivity(
+                'YOUTUBE_UPLOAD',
+                `Reconciled and published YouTube Short: "${resumableStatus.videoId}" (no re-upload required)`,
+                job.account_username,
+                { videoId: resumableStatus.videoId }
+              );
+              return completedJob!;
+            }
+          }
+        } catch (reconcileErr) {
+          console.warn(`[Retry] Resumable reconciliation check failed:`, reconcileErr);
+        }
+      }
+
+      // 2. Determine video stream source:
+      // When a Drive backup exists, use the authenticated Drive download stream as the retry source
+      let videoSourceUrl: string;
+      let sourceHeaders: Record<string, string> | undefined = undefined;
+
+      if (job.drive_file_id) {
+        videoSourceUrl = GoogleDriveService.getMediaDownloadUrl(job.drive_file_id);
+        sourceHeaders = GoogleDriveService.getAuthHeaders(accessToken);
+      } else {
+        // Need to archive to Drive first
         const folderId = await GoogleDriveService.getOrCreateFolder(
           automation.drive_folder_name,
           accessToken
         );
         const fileName = `reel_${job.reel_id}_${job.account_username}.mp4`;
         const driveRes = await GoogleDriveService.streamVideoToDrive(
-          videoSource,
+          job.original_reel_url,
           fileName,
           folderId,
           accessToken
@@ -353,38 +433,69 @@ export class PipelineService {
           drive_file_url: driveRes.webViewLink,
           status: 'STORED_DRIVE',
         });
+        videoSourceUrl = GoogleDriveService.getMediaDownloadUrl(driveRes.fileId);
+        sourceHeaders = GoogleDriveService.getAuthHeaders(accessToken);
       }
 
-      // Upload to YouTube
+      // 3. Upload to YouTube using authenticated Drive stream & session tracking
       await Repository.updateUploadJob(jobId, { status: 'UPLOADING_TO_YOUTUBE' });
+
       const ytResult = await YouTubeService.streamVideoToYouTube(
-        videoSource,
+        videoSourceUrl,
         {
           caption: job.caption,
           username: job.account_username,
           privacyStatus: automation.default_visibility,
         },
-        accessToken
+        accessToken,
+        {
+          sourceHeaders,
+          sessionUri: currentSessionUri,
+          onSessionInitiated: async (newSessionUri) => {
+            currentSessionUri = newSessionUri;
+            const enc = newSessionUri ? encryptToken(newSessionUri) : null;
+            await Repository.updateUploadJob(jobId, {
+              encrypted_youtube_upload_session_uri: enc,
+            });
+          },
+        }
       );
 
+      const finalSession = ytResult.sessionUri || currentSessionUri;
       const finalJob = await Repository.updateUploadJob(jobId, {
         status: 'COMPLETED',
         youtube_video_id: ytResult.videoId,
         youtube_video_url: ytResult.videoUrl,
+        encrypted_youtube_upload_session_uri: finalSession ? encryptToken(finalSession) : null,
         completed_at: new Date().toISOString(),
         error_details: null,
       });
 
+      await Repository.recordReel(job.reel_id, job.instagram_account_id, job.original_reel_url);
+
+      await Repository.logActivity(
+        'YOUTUBE_UPLOAD',
+        `Published YouTube Short: "${ytResult.title}"`,
+        job.account_username,
+        { videoId: ytResult.videoId, videoUrl: ytResult.videoUrl, visibility: automation.default_visibility }
+      );
+
       return finalJob!;
-    } catch (err) {
-      const errMsg = (err as Error).message;
+    } catch (err: any) {
+      const errMsg = err.message || String(err);
+      const sessionUri = err.sessionUri || currentSessionUri;
+      const newStatus = sessionUri ? 'AMBIGUOUS_UPLOAD' : 'FAILED';
+      const enc = sessionUri ? encryptToken(sessionUri) : null;
+
       await Repository.updateUploadJob(jobId, {
-        status: 'FAILED',
+        status: newStatus,
+        encrypted_youtube_upload_session_uri: enc,
         error_details: errMsg,
       });
+
       await Repository.logActivity(
         'UPLOAD_FAILED',
-        `Retry failed for reel on @${job.account_username}: ${errMsg}`,
+        `Retry ${newStatus === 'AMBIGUOUS_UPLOAD' ? 'marked ambiguous' : 'failed'} for reel on @${job.account_username}: ${errMsg}`,
         job.account_username,
         { error: errMsg }
       );
@@ -576,7 +687,15 @@ export class PipelineService {
           username: resolution.username || 'creator',
           privacyStatus: visibility,
         },
-        accessToken
+        accessToken,
+        {
+          onSessionInitiated: async (sessionUri) => {
+            const enc = sessionUri ? encryptToken(sessionUri) : null;
+            await Repository.updateUploadJob(job.id, {
+              encrypted_youtube_upload_session_uri: enc,
+            });
+          },
+        }
       );
 
       await Repository.updateUploadJob(job.id, { status: 'VERIFYING_UPLOAD' });
@@ -585,6 +704,7 @@ export class PipelineService {
         status: 'COMPLETED',
         youtube_video_id: ytResult.videoId,
         youtube_video_url: ytResult.videoUrl,
+        encrypted_youtube_upload_session_uri: ytResult.sessionUri ? encryptToken(ytResult.sessionUri) : null,
         completed_at: new Date().toISOString(),
         error_details: null,
       });
@@ -601,16 +721,21 @@ export class PipelineService {
       );
 
       return completedJob!;
-    } catch (err) {
-      const errMsg = (err as Error).message;
+    } catch (err: any) {
+      const errMsg = err.message || String(err);
+      const sessionUri = err.sessionUri;
+      const status = sessionUri ? 'AMBIGUOUS_UPLOAD' : 'FAILED';
+      const enc = sessionUri ? encryptToken(sessionUri) : null;
+
       const failedJob = await Repository.updateUploadJob(job.id, {
-        status: 'FAILED',
+        status,
+        encrypted_youtube_upload_session_uri: enc,
         error_details: errMsg,
       });
 
       await Repository.logActivity(
         'UPLOAD_FAILED',
-        `Pipeline transfer failed for Reel #${shortcode}: ${errMsg}`,
+        `Pipeline transfer failed (${status}) for Reel #${shortcode}: ${errMsg}`,
         job.account_username,
         { error: errMsg }
       );

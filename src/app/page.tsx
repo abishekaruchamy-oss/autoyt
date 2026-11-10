@@ -21,13 +21,13 @@ export default function DashboardPage() {
         fetch('/api/accounts'),
       ]);
 
-      const dashData = await dashRes.json();
-      const accData = await accRes.json();
+      const dashData = (await dashRes.json()) as { success: boolean; metrics?: DashboardMetrics };
+      const accData = (await accRes.json()) as { success: boolean; accounts?: InstagramAccount[] };
 
-      if (dashData.success) {
+      if (dashData.success && dashData.metrics) {
         setMetrics(dashData.metrics);
       }
-      if (accData.success) {
+      if (accData.success && accData.accounts) {
         setAllAccounts(accData.accounts);
       }
     } catch (err) {

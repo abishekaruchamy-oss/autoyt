@@ -162,7 +162,10 @@ export class InstagramBusinessDiscoveryService {
         headers: { Accept: 'application/json' },
       });
 
-      const data = await res.json();
+      const data = (await res.json()) as {
+        error?: { message?: string; code?: number; error_subcode?: number };
+        business_discovery?: MetaBusinessDiscoveryProfile;
+      };
 
       // Check Meta API errors
       if (!res.ok || data.error) {
@@ -212,7 +215,7 @@ export class InstagramBusinessDiscoveryService {
       }
 
       // Success: Profile is an eligible Business/Creator account
-      const profileData: MetaBusinessDiscoveryProfile = data.business_discovery;
+      const profileData = data.business_discovery;
       if (!profileData) {
         return {
           targetUsername: username,

@@ -2,9 +2,25 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Repository } from '@/server/db/repository';
 import { JobStatus } from '@/types';
 
+interface UploadStatusPayload {
+  job_id?: string;
+  reel_id?: string;
+  instagram_account_id?: string;
+  account_username?: string;
+  caption?: string;
+  original_reel_url?: string;
+  thumbnail_url?: string;
+  drive_file_id?: string;
+  drive_file_url?: string;
+  youtube_video_id?: string;
+  youtube_video_url?: string;
+  status?: JobStatus;
+  error_details?: string;
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const body = (await request.json()) as UploadStatusPayload;
     const {
       job_id,
       reel_id,

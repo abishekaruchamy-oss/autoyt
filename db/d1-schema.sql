@@ -71,10 +71,12 @@ CREATE TABLE IF NOT EXISTS upload_jobs (
     drive_file_url TEXT,
     youtube_video_id TEXT,
     youtube_video_url TEXT,
+    encrypted_youtube_upload_session_uri TEXT,
     status TEXT NOT NULL DEFAULT 'SUBMITTED' CHECK (status IN (
         'SUBMITTED', 'VALIDATING', 'RESOLVING_MEDIA', 'MEDIA_AVAILABLE',
         'WAITING_FOR_AUTHORIZED_MEDIA', 'ARCHIVING_TO_DRIVE', 'STORED_IN_DRIVE',
         'UPLOADING_TO_YOUTUBE', 'VERIFYING_UPLOAD', 'COMPLETED', 'FAILED',
+        'AMBIGUOUS_UPLOAD',
         -- Legacy status aliases
         'DETECTED', 'DOWNLOADING', 'STORED_DRIVE', 'RETRYING'
     )),
@@ -89,8 +91,8 @@ CREATE TABLE IF NOT EXISTS upload_jobs (
 
 CREATE INDEX IF NOT EXISTS idx_upload_jobs_status ON upload_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_upload_jobs_profile ON upload_jobs(profile_id);
-CREATE INDEX IF NOT EXISTS idx_upload_jobs_shortcode ON upload_jobs(shortcode);
-CREATE INDEX IF NOT EXISTS idx_upload_jobs_reel_id ON upload_jobs(reel_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_upload_jobs_unique_shortcode ON upload_jobs(shortcode) WHERE shortcode IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_upload_jobs_unique_reel_id ON upload_jobs(reel_id);
 
 -- 5. Chronological Activity Logs
 CREATE TABLE IF NOT EXISTS activity_logs (

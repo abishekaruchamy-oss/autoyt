@@ -17,13 +17,13 @@ export default function UploadsPage() {
         fetch('/api/accounts'),
       ]);
 
-      const jobsData = await jobsRes.json();
-      const accData = await accRes.json();
+      const jobsData = (await jobsRes.json()) as { success: boolean; jobs?: UploadJob[] };
+      const accData = (await accRes.json()) as { success: boolean; accounts?: InstagramAccount[] };
 
-      if (jobsData.success) {
+      if (jobsData.success && jobsData.jobs) {
         setJobs(jobsData.jobs);
       }
-      if (accData.success) {
+      if (accData.success && accData.accounts) {
         setAccounts(accData.accounts);
       }
     } catch (err) {

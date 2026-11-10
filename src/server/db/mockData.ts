@@ -6,7 +6,6 @@ import {
   ActivityLog,
   IntegrationStatus,
 } from '@/types';
-import { encryptToken } from '@/lib/crypto';
 
 export function createInitialMonitoredProfiles(): MonitoredProfile[] {
   const now = new Date();
@@ -71,7 +70,7 @@ export function createInitialMockAccounts(): InstagramAccount[] {
       name: 'Tech Trends & AI Daily',
       profile_picture_url:
         'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150&auto=format&fit=crop&q=80',
-      access_token_encrypted: encryptToken('EAABmock_token_techtrends_active_secret_key_99'),
+      access_token_encrypted: 'mock_enc_EAABmock_token_techtrends_active_secret_key_99',
       token_expires_at: new Date(now.getTime() + 48 * 24 * 60 * 60 * 1000).toISOString(),
       status: 'ACTIVE',
       is_active: true,
@@ -88,7 +87,7 @@ export function createInitialMockAccounts(): InstagramAccount[] {
       name: 'Studio Los Angeles',
       profile_picture_url:
         'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-      access_token_encrypted: encryptToken('EAABmock_token_creativestudio_secret_key_88'),
+      access_token_encrypted: 'mock_enc_EAABmock_token_creativestudio_secret_key_88',
       token_expires_at: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString(),
       status: 'ACTIVE',
       is_active: false,
@@ -105,7 +104,7 @@ export function createInitialMockAccounts(): InstagramAccount[] {
       name: 'Fitness Fuel Pro',
       profile_picture_url:
         'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-      access_token_encrypted: encryptToken('EAABmock_token_fitnessfuel_secret_key_77'),
+      access_token_encrypted: 'mock_enc_EAABmock_token_fitnessfuel_secret_key_77',
       token_expires_at: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString(),
       status: 'EXPIRED',
       is_active: false,

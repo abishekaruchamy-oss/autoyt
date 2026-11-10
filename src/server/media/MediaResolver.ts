@@ -425,7 +425,7 @@ export class StandardPublicProbeProvider implements IMediaProvider {
         const oembedUrl = `https://api.instagram.com/oembed/?url=${encodeURIComponent(canonicalUrl)}`;
         const oembedRes = await fetch(oembedUrl);
         if (oembedRes.ok) {
-          const oembedData = await oembedRes.json();
+          const oembedData = (await oembedRes.json()) as { author_name?: string; title?: string };
           authorName = oembedData.author_name || authorName;
           title = oembedData.title || title;
         }

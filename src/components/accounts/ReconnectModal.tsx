@@ -28,7 +28,7 @@ export function ReconnectModal({ account, isOpen, onClose, onSuccess }: Reconnec
           raw_token: `EAAB_refreshed_oauth_token_${Date.now()}`,
         }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as { success: boolean; error?: string };
       if (data.success) {
         setSuccess(true);
         setTimeout(() => {

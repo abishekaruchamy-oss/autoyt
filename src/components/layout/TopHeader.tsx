@@ -27,7 +27,7 @@ export function TopHeader({ activeAccount, automation, onRefresh }: TopHeaderPro
       setIsSyncing(true);
       setSyncMessage(null);
       const res = await fetch('/api/automation/sync-now', { method: 'POST' });
-      const data = await res.json();
+      const data = (await res.json()) as { success: boolean; error?: string };
       if (data.success) {
         setSyncMessage('Sync finished!');
         setTimeout(() => setSyncMessage(null), 3000);

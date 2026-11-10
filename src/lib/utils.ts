@@ -209,6 +209,13 @@ export function getJobStatusBadge(status: string): {
         border: 'border-amber-500/20',
         label: 'Retrying',
       };
+    case 'AMBIGUOUS_UPLOAD':
+      return {
+        bg: 'bg-amber-500/10',
+        text: 'text-amber-400',
+        border: 'border-amber-500/20',
+        label: 'Ambiguous (Reconciliation Required)',
+      };
     case 'FAILED':
     default:
       return {

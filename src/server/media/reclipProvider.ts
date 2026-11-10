@@ -264,7 +264,7 @@ export class ReClipYtDlpProvider implements IMediaProvider {
       });
 
       if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
+        const errorData = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(errorData.error || `Remote ReClip service returned HTTP ${res.status}`);
       }
 

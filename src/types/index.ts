@@ -20,6 +20,7 @@ export type JobStatus =
   | 'VERIFYING_UPLOAD'
   | 'COMPLETED'
   | 'FAILED'
+  | 'AMBIGUOUS_UPLOAD'
   // Legacy aliases
   | 'DETECTED'
   | 'DOWNLOADING'
@@ -35,6 +36,7 @@ export interface ReelSubmissionPayload {
   captionOverride?: string;
   visibility?: PublishingVisibility;
   confirmedRights: boolean;
+  sandbox?: boolean;
 }
 
 /**
@@ -118,6 +120,7 @@ export interface UploadJob {
   drive_file_url: string | null;
   youtube_video_id: string | null;
   youtube_video_url: string | null;
+  encrypted_youtube_upload_session_uri?: string | null;
   status: JobStatus;
   error_details: string | null;
   retry_count: number;
@@ -210,6 +213,9 @@ export interface IntegrationStatus {
     last_ping: string | null;
   };
 }
+
+export type IntegrationName = keyof IntegrationStatus;
+export type IntegrationData = Partial<IntegrationStatus[keyof IntegrationStatus]>;
 
 /**
  * Monitoring Adapter Protocol

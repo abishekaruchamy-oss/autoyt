@@ -14,6 +14,14 @@ export interface YouTubeUploadResult {
   title: string;
   privacyStatus: string;
   publishedAt: string;
+  sessionUri?: string;
+}
+
+export interface YouTubeResumableStatus {
+  isComplete: boolean;
+  bytesReceived: number;
+  videoId?: string;
+  videoUrl?: string;
 }
 
 export interface YouTubeChannelInfo {
@@ -48,7 +56,21 @@ export class YouTubeService {
       throw new Error(`Failed to fetch YouTube channel details: ${err}`);
     }
 
-    const data = await res.json();
+    const data = (await res.json()) as {
+      items?: Array<{
+        id: string;
+        snippet: {
+          title: string;
+          description?: string;
+          customUrl?: string;
+          thumbnails?: { default?: { url?: string } };
+        };
+        statistics?: {
+          subscriberCount?: string;
+          videoCount?: string;
+        };
+      }>;
+    };
     if (!data.items || data.items.length === 0) {
       throw new Error(
         'No YouTube channel found for the authorized Google account. Please create a channel on YouTube first.'
@@ -128,7 +150,7 @@ export class YouTubeService {
   static async queryResumableStatus(
     sessionUri: string,
     totalBytes: number
-  ): Promise<{ isComplete: boolean; bytesReceived: number }> {
+  ): Promise<YouTubeResumableStatus> {
     const res = await fetch(sessionUri, {
       method: 'PUT',
       headers: {
@@ -137,7 +159,14 @@ export class YouTubeService {
     });
 
     if (res.status === 200 || res.status === 201) {
-      return { isComplete: true, bytesReceived: totalBytes };
+      const data = (await res.json().catch(() => ({}))) as { id?: string };
+      const videoId = data?.id;
+      return {
+        isComplete: true,
+        bytesReceived: totalBytes,
+        videoId,
+        videoUrl: videoId ? `https://youtube.com/shorts/${videoId}` : undefined,
+      };
     }
 
     if (res.status === 308) {
@@ -151,11 +180,17 @@ export class YouTubeService {
       return { isComplete: false, bytesReceived: 0 };
     }
 
+    if (res.status === 404 || res.status === 410) {
+      return { isComplete: false, bytesReceived: 0 };
+    }
+
     throw new Error(`Unexpected status querying YouTube resumable upload: ${res.status}`);
   }
 
   /**
-   * Streams video binary from source directly to YouTube Resumable Session URI
+   * Streams video binary from source directly to YouTube Resumable Session URI.
+   * Supports authenticated source streams (e.g. Google Drive), session URI persistence,
+   * and crash recovery.
    */
   static async streamVideoToYouTube(
     sourceVideoUrl: string,
@@ -164,10 +199,18 @@ export class YouTubeService {
       username: string;
       privacyStatus?: 'public' | 'unlisted' | 'private';
     },
-    accessToken: string
+    accessToken: string,
+    options?: {
+      sourceHeaders?: Record<string, string>;
+      sessionUri?: string;
+      onSessionInitiated?: (sessionUri: string) => Promise<void> | void;
+    }
   ): Promise<YouTubeUploadResult> {
-    // 1. Fetch source video Content-Length
-    const headRes = await fetch(sourceVideoUrl, { method: 'HEAD' });
+    // 1. Fetch source video Content-Length with optional sourceHeaders (e.g. Google Drive auth)
+    const headRes = await fetch(sourceVideoUrl, {
+      method: 'HEAD',
+      headers: options?.sourceHeaders,
+    });
     const contentLength = headRes.headers.get('content-length');
     const totalBytes = contentLength ? parseInt(contentLength, 10) : 0;
 
@@ -175,19 +218,49 @@ export class YouTubeService {
       throw new Error('Source video Content-Length is missing or zero.');
     }
 
-    // 2. Initiate resumable upload session
-    const { sessionUri, title } = await this.initiateResumableUpload(
-      {
-        caption: metadata.caption,
-        username: metadata.username,
-        privacyStatus: metadata.privacyStatus,
-        sizeBytes: totalBytes,
-      },
-      accessToken
-    );
+    // 2. Obtain or initiate resumable upload session
+    let sessionUri = options?.sessionUri;
+    let title = metadata.caption;
+
+    if (!sessionUri) {
+      const initiated = await this.initiateResumableUpload(
+        {
+          caption: metadata.caption,
+          username: metadata.username,
+          privacyStatus: metadata.privacyStatus,
+          sizeBytes: totalBytes,
+        },
+        accessToken
+      );
+      sessionUri = initiated.sessionUri;
+      title = initiated.title;
+
+      if (options?.onSessionInitiated) {
+        await options.onSessionInitiated(sessionUri);
+      }
+    } else {
+      // Existing session supplied: check if session has already completed before re-uploading chunks
+      try {
+        const existingStatus = await this.queryResumableStatus(sessionUri, totalBytes);
+        if (existingStatus.isComplete && existingStatus.videoId) {
+          return {
+            videoId: existingStatus.videoId,
+            videoUrl: existingStatus.videoUrl || `https://youtube.com/shorts/${existingStatus.videoId}`,
+            title,
+            privacyStatus: metadata.privacyStatus || 'private',
+            publishedAt: new Date().toISOString(),
+            sessionUri,
+          };
+        }
+      } catch {
+        // Proceed with streaming if query fails or is incomplete
+      }
+    }
 
     // 3. Stream binary directly to YouTube in 5MB chunks (or full stream)
-    const streamRes = await fetch(sourceVideoUrl);
+    const streamRes = await fetch(sourceVideoUrl, {
+      headers: options?.sourceHeaders,
+    });
     if (!streamRes.ok || !streamRes.body) {
       throw new Error(`Failed to fetch source video stream: HTTP ${streamRes.status}`);
     }
@@ -199,21 +272,51 @@ export class YouTubeService {
     let bufferOffset = 0;
     let uploadResponseData: any = null;
 
-    while (true) {
-      const { done, value } = await reader.read();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
 
-      if (value) {
-        let chunkRemaining = value;
-        while (chunkRemaining.length > 0) {
-          const space = CHUNK_SIZE - bufferOffset;
-          if (chunkRemaining.length < space) {
-            buffer.set(chunkRemaining, bufferOffset);
-            bufferOffset += chunkRemaining.length;
-            break;
-          } else {
-            buffer.set(chunkRemaining.subarray(0, space), bufferOffset);
-            const chunkToUpload = buffer.subarray(0, CHUNK_SIZE);
-            const endByte = uploadedBytes + CHUNK_SIZE - 1;
+        if (value) {
+          let chunkRemaining = value;
+          while (chunkRemaining.length > 0) {
+            const space = CHUNK_SIZE - bufferOffset;
+            if (chunkRemaining.length < space) {
+              buffer.set(chunkRemaining, bufferOffset);
+              bufferOffset += chunkRemaining.length;
+              break;
+            } else {
+              buffer.set(chunkRemaining.subarray(0, space), bufferOffset);
+              const chunkToUpload = buffer.subarray(0, CHUNK_SIZE);
+              const endByte = uploadedBytes + CHUNK_SIZE - 1;
+
+              const uploadRes = await fetch(sessionUri, {
+                method: 'PUT',
+                headers: {
+                  'Content-Type': 'video/mp4',
+                  'Content-Range': `bytes ${uploadedBytes}-${endByte}/${totalBytes}`,
+                },
+                body: chunkToUpload as unknown as BodyInit,
+              });
+
+              if (uploadRes.status === 200 || uploadRes.status === 201) {
+                uploadResponseData = await uploadRes.json();
+              } else if (uploadRes.status !== 308) {
+                const err = await uploadRes.text();
+                throw new Error(`YouTube upload chunk failed with HTTP ${uploadRes.status}: ${err}`);
+              }
+
+              uploadedBytes += CHUNK_SIZE;
+              chunkRemaining = chunkRemaining.subarray(space);
+              buffer = new Uint8Array(CHUNK_SIZE);
+              bufferOffset = 0;
+            }
+          }
+        }
+
+        if (done) {
+          if (bufferOffset > 0) {
+            const lastChunk = buffer.subarray(0, bufferOffset);
+            const endByte = uploadedBytes + bufferOffset - 1;
 
             const uploadRes = await fetch(sessionUri, {
               method: 'PUT',
@@ -221,51 +324,31 @@ export class YouTubeService {
                 'Content-Type': 'video/mp4',
                 'Content-Range': `bytes ${uploadedBytes}-${endByte}/${totalBytes}`,
               },
-              body: chunkToUpload as unknown as BodyInit,
+              body: lastChunk as unknown as BodyInit,
             });
 
             if (uploadRes.status === 200 || uploadRes.status === 201) {
               uploadResponseData = await uploadRes.json();
-            } else if (uploadRes.status !== 308) {
+            } else {
               const err = await uploadRes.text();
-              throw new Error(`YouTube upload chunk failed with HTTP ${uploadRes.status}: ${err}`);
+              throw new Error(`Final YouTube chunk failed with HTTP ${uploadRes.status}: ${err}`);
             }
-
-            uploadedBytes += CHUNK_SIZE;
-            chunkRemaining = chunkRemaining.subarray(space);
-            buffer = new Uint8Array(CHUNK_SIZE);
-            bufferOffset = 0;
           }
+          break;
         }
       }
-
-      if (done) {
-        if (bufferOffset > 0) {
-          const lastChunk = buffer.subarray(0, bufferOffset);
-          const endByte = uploadedBytes + bufferOffset - 1;
-
-          const uploadRes = await fetch(sessionUri, {
-            method: 'PUT',
-            headers: {
-              'Content-Type': 'video/mp4',
-              'Content-Range': `bytes ${uploadedBytes}-${endByte}/${totalBytes}`,
-            },
-            body: lastChunk as unknown as BodyInit,
-          });
-
-          if (uploadRes.status === 200 || uploadRes.status === 201) {
-            uploadResponseData = await uploadRes.json();
-          } else {
-            const err = await uploadRes.text();
-            throw new Error(`Final YouTube chunk failed with HTTP ${uploadRes.status}: ${err}`);
-          }
-        }
-        break;
-      }
+    } catch (uploadErr: any) {
+      // Attach the established session URI to enable ambiguous upload reconciliation
+      uploadErr.sessionUri = sessionUri;
+      throw uploadErr;
     }
 
     if (!uploadResponseData || !uploadResponseData.id) {
-      throw new Error('Video stream completed, but YouTube did not return a valid video ID.');
+      const ambiguousErr: any = new Error(
+        'Video stream completed, but YouTube response did not contain a valid video ID.'
+      );
+      ambiguousErr.sessionUri = sessionUri;
+      throw ambiguousErr;
     }
 
     const videoId = uploadResponseData.id;
@@ -275,6 +358,7 @@ export class YouTubeService {
       title,
       privacyStatus: metadata.privacyStatus || 'private',
       publishedAt: new Date().toISOString(),
+      sessionUri,
     };
   }
 }

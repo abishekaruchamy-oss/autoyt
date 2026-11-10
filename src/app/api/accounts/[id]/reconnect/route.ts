@@ -9,7 +9,7 @@ export async function POST(
     const { id } = await context.params;
     let raw_token: string | undefined;
     try {
-      const body = await request.json();
+      const body = (await request.json()) as { raw_token?: string };
       raw_token = body.raw_token;
     } catch {
       // Body is optional

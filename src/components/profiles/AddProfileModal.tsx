@@ -47,7 +47,7 @@ export function AddProfileModal({ isOpen, onClose, onSuccess }: AddProfileModalP
         }),
       });
 
-      const data = await res.json();
+      const data = (await res.json()) as { success: boolean; error?: string };
       if (data.success) {
         setUrlInput('');
         setDisplayName('');

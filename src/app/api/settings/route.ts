@@ -1,5 +1,11 @@
 import { NextResponse } from 'next/server';
 import { Repository } from '@/server/db/repository';
+import { AutomationSettings, IntegrationName, IntegrationData } from '@/types';
+
+interface SettingsPayload {
+  integrations?: Record<string, IntegrationData>;
+  automation?: Partial<AutomationSettings>;
+}
 
 export async function GET() {
   try {
@@ -23,7 +29,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    const body = (await request.json()) as SettingsPayload;
     const { integrations: updatedIntegrations, automation: updatedAutomation } = body;
 
     if (updatedAutomation) {
@@ -32,8 +38,7 @@ export async function POST(request: Request) {
 
     if (updatedIntegrations) {
       for (const [key, val] of Object.entries(updatedIntegrations)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await Repository.updateIntegration(key as any, val as any);
+        await Repository.updateIntegration(key as IntegrationName, val);
       }
     }
 

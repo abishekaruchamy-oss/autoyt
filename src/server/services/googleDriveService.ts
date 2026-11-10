@@ -26,6 +26,22 @@ export interface DriveFileMetadata {
 
 export class GoogleDriveService {
   /**
+   * Returns authenticated media stream download URL for a Google Drive file
+   */
+  static getMediaDownloadUrl(fileId: string): string {
+    return `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`;
+  }
+
+  /**
+   * Returns required HTTP authorization headers for accessing Drive file media
+   */
+  static getAuthHeaders(accessToken: string): Record<string, string> {
+    return {
+      Authorization: `Bearer ${accessToken}`,
+    };
+  }
+
+  /**
    * Retrieves verified file metadata (size, MIME type, md5 checksum) from Google Drive API
    */
   static async getFileMetadata(fileId: string, accessToken: string): Promise<DriveFileMetadata> {
@@ -39,7 +55,16 @@ export class GoogleDriveService {
       throw new Error(`Failed to fetch Drive file metadata for ${fileId}: ${err}`);
     }
 
-    const data = await res.json();
+    const data = (await res.json()) as {
+      id: string;
+      name: string;
+      size?: string;
+      mimeType?: string;
+      md5Checksum?: string;
+      webViewLink?: string;
+      webContentLink?: string;
+      trashed?: boolean;
+    };
     return {
       id: data.id,
       name: data.name,
@@ -70,7 +95,7 @@ export class GoogleDriveService {
       throw new Error(`Google Drive folder search failed: ${err}`);
     }
 
-    const data = await res.json();
+    const data = (await res.json()) as { files?: Array<{ id: string; name: string }> };
     if (data.files && data.files.length > 0) {
       return data.files[0].id;
     }
@@ -93,7 +118,7 @@ export class GoogleDriveService {
       throw new Error(`Failed to create Google Drive folder: ${err}`);
     }
 
-    const newFolder = await createRes.json();
+    const newFolder = (await createRes.json()) as { id: string; name: string };
     return newFolder.id;
   }
 
@@ -116,7 +141,7 @@ export class GoogleDriveService {
     });
 
     if (!res.ok) return null;
-    const data = await res.json();
+    const data = (await res.json()) as { files?: Array<{ id: string; name: string }> };
     if (data.files && data.files.length > 0) {
       return data.files[0].id;
     }
@@ -224,7 +249,7 @@ export class GoogleDriveService {
     });
 
     if (res.status === 200 || res.status === 201) {
-      const file = await res.json();
+      const file = (await res.json()) as { id: string; name: string };
       return {
         fileId: file.id,
         name: file.name,

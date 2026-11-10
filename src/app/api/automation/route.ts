@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { Repository } from '@/server/db/repository';
+import { AutomationSettings } from '@/types';
 
 export async function GET() {
   try {
@@ -20,7 +21,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    const body = (await request.json()) as Partial<AutomationSettings>;
     const updated = await Repository.updateAutomationSettings(body);
     return NextResponse.json({
       success: true,

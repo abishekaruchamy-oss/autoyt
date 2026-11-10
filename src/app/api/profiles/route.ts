@@ -13,9 +13,14 @@ export async function GET() {
   }
 }
 
+interface AddProfilePayload {
+  profile_url?: string;
+  display_name?: string;
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const body = (await request.json()) as AddProfilePayload;
     const { profile_url, display_name } = body;
 
     if (!profile_url) {

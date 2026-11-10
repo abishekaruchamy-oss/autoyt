@@ -5,7 +5,7 @@ export async function POST(request: NextRequest) {
   try {
     let success = true;
     try {
-      const body = await request.json();
+      const body = (await request.json()) as { success?: boolean };
       if (typeof body.success === 'boolean') {
         success = body.success;
       }

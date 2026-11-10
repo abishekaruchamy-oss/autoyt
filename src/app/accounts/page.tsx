@@ -16,8 +16,8 @@ function ProfilesContent() {
   const fetchProfiles = useCallback(async () => {
     try {
       const res = await fetch('/api/profiles');
-      const data = await res.json();
-      if (data.success) {
+      const data = (await res.json()) as { success: boolean; profiles?: MonitoredProfile[]; error?: string };
+      if (data.success && data.profiles) {
         setProfiles(data.profiles);
       }
     } catch (err) {
@@ -33,7 +33,7 @@ function ProfilesContent() {
 
   const handleActivate = async (id: string) => {
     const res = await fetch(`/api/profiles/${id}/activate`, { method: 'POST' });
-    const data = await res.json();
+    const data = (await res.json()) as { success: boolean; error?: string };
     if (data.success) {
       await fetchProfiles();
     } else {
@@ -44,7 +44,7 @@ function ProfilesContent() {
   const handleTogglePause = async (id: string, pause: boolean) => {
     const endpoint = pause ? `/api/profiles/${id}/pause` : `/api/profiles/${id}/resume`;
     const res = await fetch(endpoint, { method: 'POST' });
-    const data = await res.json();
+    const data = (await res.json()) as { success: boolean; error?: string };
     if (data.success) {
       await fetchProfiles();
     } else {
@@ -54,7 +54,7 @@ function ProfilesContent() {
 
   const handleCheckNow = async (id: string) => {
     const res = await fetch(`/api/profiles/${id}/check`, { method: 'POST' });
-    const data = await res.json();
+    const data = (await res.json()) as { success: boolean; error?: string };
     if (data.success) {
       await fetchProfiles();
     } else {
@@ -64,7 +64,7 @@ function ProfilesContent() {
 
   const handleRemove = async (id: string) => {
     const res = await fetch(`/api/profiles/${id}`, { method: 'DELETE' });
-    const data = await res.json();
+    const data = (await res.json()) as { success: boolean; error?: string };
     if (data.success) {
       await fetchProfiles();
     } else {

@@ -34,7 +34,7 @@ export function ActiveSourceCard({
       setSwitching(true);
       setShowSwitchMenu(false);
       const res = await fetch(`/api/accounts/${id}/activate`, { method: 'POST' });
-      const data = await res.json();
+      const data = (await res.json()) as { success: boolean; error?: string };
       if (data.success) {
         onAccountSwitched();
       } else {

@@ -61,7 +61,7 @@ export function IntegrationsPanel({
           },
         }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as { success: boolean; error?: string };
       if (data.success) {
         setSaved(true);
         setTimeout(() => setSaved(false), 2500);
@@ -82,7 +82,7 @@ export function IntegrationsPanel({
     if (confirm('Disconnect your Google account? Uploads to Google Drive and YouTube Shorts will be paused.')) {
       try {
         const res = await fetch('/api/auth/google/disconnect', { method: 'POST' });
-        const data = await res.json();
+        const data = (await res.json()) as { success: boolean; error?: string };
         if (data.success) {
           onUpdate();
         } else {
@@ -103,7 +103,7 @@ export function IntegrationsPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sandbox: false }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as { success: boolean; message?: string; error?: string };
       if (data.success) {
         setSyncMessage(data.message || 'Sync completed successfully.');
         onUpdate();

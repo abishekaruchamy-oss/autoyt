@@ -14,11 +14,16 @@ export default function SettingsPage() {
   const fetchData = useCallback(async () => {
     try {
       const res = await fetch('/api/settings');
-      const data = await res.json();
-      if (data.success) {
+      const data = (await res.json()) as {
+        success: boolean;
+        integrations?: IntegrationStatus;
+        automation?: AutomationSettings;
+        accounts_count?: number;
+      };
+      if (data.success && data.integrations && data.automation) {
         setIntegrations(data.integrations);
         setAutomation(data.automation);
-        setAccountsCount(data.accounts_count);
+        setAccountsCount(data.accounts_count ?? 0);
       }
     } catch (err) {
       console.error('Failed to load settings:', err);

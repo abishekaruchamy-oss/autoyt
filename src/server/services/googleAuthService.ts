@@ -84,7 +84,15 @@ export async function exchangeCodeForTokens(
     body: body.toString(),
   });
 
-  const data = await res.json();
+  const data = (await res.json()) as {
+    access_token: string;
+    refresh_token?: string;
+    expires_in: number;
+    token_type: string;
+    scope: string;
+    error?: string;
+    error_description?: string;
+  };
   if (!res.ok || data.error) {
     throw new Error(data.error_description || data.error || 'Failed to exchange Google OAuth code.');
   }
@@ -126,7 +134,11 @@ export async function refreshAccessToken(refreshTokenEncrypted: string): Promise
     body: body.toString(),
   });
 
-  const data = await res.json();
+  const data = (await res.json()) as {
+    access_token: string;
+    error?: string;
+    error_description?: string;
+  };
   if (!res.ok || data.error) {
     throw new Error(data.error_description || data.error || 'Failed to refresh Google access token.');
   }
@@ -142,7 +154,11 @@ export async function fetchGoogleAccountDetails(accessToken: string): Promise<Go
   const userRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
-  const userData = await userRes.json();
+  const userData = (await userRes.json()) as {
+    email?: string;
+    name?: string;
+    picture?: string;
+  };
 
   let details: GoogleAccountDetails = {
     email: userData.email || 'unknown@gmail.com',
@@ -158,7 +174,19 @@ export async function fetchGoogleAccountDetails(accessToken: string): Promise<Go
         headers: { Authorization: `Bearer ${accessToken}` },
       }
     );
-    const ytData = await ytRes.json();
+    const ytData = (await ytRes.json()) as {
+      items?: Array<{
+        id: string;
+        snippet: {
+          title: string;
+          customUrl?: string;
+          thumbnails?: { default?: { url?: string } };
+        };
+        statistics?: {
+          subscriberCount?: string;
+        };
+      }>;
+    };
     if (ytData.items && ytData.items.length > 0) {
       const ch = ytData.items[0];
       details.youtubeChannel = {

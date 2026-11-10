@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Repository } from '@/server/db/repository';
-import { JobStatus } from '@/types';
+import { JobStatus, UploadJob } from '@/types';
 
 export async function GET(request: NextRequest) {
   try {
@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    const body = (await request.json()) as Partial<UploadJob>;
     const newJob = await Repository.addUploadJob(body);
     return NextResponse.json({ success: true, job: newJob });
   } catch (error) {

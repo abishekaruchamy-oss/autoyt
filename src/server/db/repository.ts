@@ -843,25 +843,79 @@ export class Repository {
   // ==========================================
 
   /**
-   * Checks whether a Reel ID has already been recorded in durable storage.
+   * Helper to map a raw D1 SQL row to an UploadJob typed object
    */
-  static async isReelRecorded(reelId: string): Promise<boolean> {
+  private static mapRowToUploadJob(r: any): UploadJob {
+    return {
+      id: r.id,
+      reel_id: r.reel_id,
+      instagram_account_id: r.profile_id || '',
+      account_username: r.account_username,
+      caption: r.caption || '',
+      thumbnail_url: r.thumbnail_url || '',
+      original_reel_url: r.original_reel_url,
+      drive_file_id: r.drive_file_id || null,
+      drive_file_url: r.drive_file_url || null,
+      youtube_video_id: r.youtube_video_id || null,
+      youtube_video_url: r.youtube_video_url || null,
+      encrypted_youtube_upload_session_uri: r.encrypted_youtube_upload_session_uri || null,
+      status: r.status as JobStatus,
+      error_details: r.error_details || null,
+      retry_count: Number(r.retry_count || 0),
+      max_retries: Number(r.max_retries || 3),
+      detected_at: r.detected_at,
+      completed_at: r.completed_at || null,
+      shortcode: r.shortcode,
+      rights_confirmed: Boolean(r.rights_confirmed),
+      media_source_type: r.media_source_type,
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+    };
+  }
+
+  /**
+   * Checks whether a Reel ID has already been recorded in durable storage.
+   * If allowOrphanRecovery is true, a reel that exists in the reels table
+   * without any associated upload_job is treated as unrecorded so that a crash
+   * between reel insertion and job creation does not permanently lose processing work.
+   */
+  static async isReelRecorded(
+    reelId: string,
+    options?: { allowOrphanRecovery?: boolean }
+  ): Promise<boolean> {
     const d1 = getD1Database();
     if (d1) {
-      const fromReels = await d1
-        .prepare('SELECT id FROM reels WHERE reel_id = ?')
-        .bind(reelId)
-        .first();
-      if (fromReels) return true;
-
       const fromJobs = await d1
         .prepare('SELECT id FROM upload_jobs WHERE reel_id = ? OR shortcode = ?')
         .bind(reelId, reelId)
         .first();
-      return fromJobs !== null;
+
+      const fromReels = await d1
+        .prepare('SELECT id FROM reels WHERE reel_id = ?')
+        .bind(reelId)
+        .first();
+
+      if (options?.allowOrphanRecovery) {
+        if (fromJobs) return true;
+        if (fromReels) return false; // Orphaned record; allow recovery
+        return false;
+      }
+
+      return fromJobs !== null || fromReels !== null;
     }
 
-    return store.recordedReels.has(reelId);
+    const jobExists = store.uploadJobs.some(
+      (j) => j.reel_id === reelId || j.shortcode === reelId
+    );
+    const recordedInSet = store.recordedReels.has(reelId);
+
+    if (options?.allowOrphanRecovery) {
+      if (jobExists) return true;
+      if (recordedInSet) return false;
+      return false;
+    }
+
+    return recordedInSet || jobExists;
   }
 
   /**
@@ -879,6 +933,7 @@ export class Repository {
 
       const id = `reel-${crypto.randomUUID()}`;
       const now = new Date().toISOString();
+
       await d1
         .prepare(`
           INSERT OR IGNORE INTO reels (id, profile_id, reel_id, permalink, published_at, created_at)
@@ -900,6 +955,79 @@ export class Repository {
     if (store.recordedReels.has(reelId)) return false;
     store.recordedReels.add(reelId);
     return true;
+  }
+
+  /**
+   * Atomically registers a discovered reel and creates its upload job in a single D1 transaction.
+   * Eliminates any window for crashes to separate reel registration from job queueing.
+   */
+  static async registerDiscoveredReel(
+    reel: { reel_id: string; permalink: string; caption?: string; thumbnail_url?: string },
+    profile: { id: string; username: string }
+  ): Promise<UploadJob> {
+    const now = new Date().toISOString();
+    const jobId = crypto.randomUUID();
+    const reelRecordId = `reel-${crypto.randomUUID()}`;
+
+    const d1 = getD1Database();
+    if (d1) {
+      await d1.batch([
+        d1.prepare(`
+          INSERT OR IGNORE INTO reels (id, profile_id, reel_id, permalink, published_at, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).bind(reelRecordId, profile.id, reel.reel_id, reel.permalink, now, now),
+        d1.prepare(`
+          INSERT OR IGNORE INTO upload_jobs (
+            id, reel_id, profile_id, account_username, caption,
+            thumbnail_url, original_reel_url, status, detected_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'DETECTED', ?, ?, ?)
+        `).bind(
+          jobId,
+          reel.reel_id,
+          profile.id,
+          profile.username,
+          reel.caption || '',
+          reel.thumbnail_url || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=400',
+          reel.permalink,
+          now,
+          now,
+          now
+        ),
+      ]);
+
+      const job = await this.getUploadJobByReelId(reel.reel_id);
+      return job!;
+    }
+
+    store.recordedReels.add(reel.reel_id);
+    const existing = store.uploadJobs.find((j) => j.reel_id === reel.reel_id);
+    if (existing) return existing;
+
+    const newJob: UploadJob = {
+      id: jobId,
+      reel_id: reel.reel_id,
+      instagram_account_id: profile.id,
+      account_username: profile.username,
+      caption: reel.caption || '',
+      thumbnail_url:
+        reel.thumbnail_url || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=400',
+      original_reel_url: reel.permalink,
+      drive_file_id: null,
+      drive_file_url: null,
+      youtube_video_id: null,
+      youtube_video_url: null,
+      encrypted_youtube_upload_session_uri: null,
+      status: 'DETECTED',
+      error_details: null,
+      retry_count: 0,
+      max_retries: 3,
+      detected_at: now,
+      completed_at: null,
+      created_at: now,
+      updated_at: now,
+    };
+    store.uploadJobs.unshift(newJob);
+    return newJob;
   }
 
   // ==========================================
@@ -937,30 +1065,7 @@ export class Repository {
       query += ' ORDER BY created_at DESC';
 
       const res = await d1.prepare(query).bind(...params).all<any>();
-      return res.results.map((r) => ({
-        id: r.id,
-        reel_id: r.reel_id,
-        instagram_account_id: r.profile_id || '',
-        account_username: r.account_username,
-        caption: r.caption || '',
-        thumbnail_url: r.thumbnail_url || '',
-        original_reel_url: r.original_reel_url,
-        drive_file_id: r.drive_file_id,
-        drive_file_url: r.drive_file_url,
-        youtube_video_id: r.youtube_video_id,
-        youtube_video_url: r.youtube_video_url,
-        status: r.status as JobStatus,
-        error_details: r.error_details,
-        retry_count: Number(r.retry_count || 0),
-        max_retries: Number(r.max_retries || 3),
-        detected_at: r.detected_at,
-        completed_at: r.completed_at,
-        shortcode: r.shortcode,
-        rights_confirmed: Boolean(r.rights_confirmed),
-        media_source_type: r.media_source_type,
-        created_at: r.created_at,
-        updated_at: r.updated_at,
-      }));
+      return res.results.map((r) => this.mapRowToUploadJob(r));
     }
 
     let jobs = [...store.uploadJobs];
@@ -993,30 +1098,7 @@ export class Repository {
         .bind(id)
         .first<any>();
       if (!r) return null;
-      return {
-        id: r.id,
-        reel_id: r.reel_id,
-        instagram_account_id: r.profile_id || '',
-        account_username: r.account_username,
-        caption: r.caption || '',
-        thumbnail_url: r.thumbnail_url || '',
-        original_reel_url: r.original_reel_url,
-        drive_file_id: r.drive_file_id,
-        drive_file_url: r.drive_file_url,
-        youtube_video_id: r.youtube_video_id,
-        youtube_video_url: r.youtube_video_url,
-        status: r.status as JobStatus,
-        error_details: r.error_details,
-        retry_count: Number(r.retry_count || 0),
-        max_retries: Number(r.max_retries || 3),
-        detected_at: r.detected_at,
-        completed_at: r.completed_at,
-        shortcode: r.shortcode,
-        rights_confirmed: Boolean(r.rights_confirmed),
-        media_source_type: r.media_source_type,
-        created_at: r.created_at,
-        updated_at: r.updated_at,
-      };
+      return this.mapRowToUploadJob(r);
     }
 
     return store.uploadJobs.find((j) => j.id === id) || null;
@@ -1031,30 +1113,7 @@ export class Repository {
         .bind(clean, `%${clean}%`)
         .first<any>();
       if (!r) return null;
-      return {
-        id: r.id,
-        reel_id: r.reel_id,
-        instagram_account_id: r.profile_id || '',
-        account_username: r.account_username,
-        caption: r.caption || '',
-        thumbnail_url: r.thumbnail_url || '',
-        original_reel_url: r.original_reel_url,
-        drive_file_id: r.drive_file_id,
-        drive_file_url: r.drive_file_url,
-        youtube_video_id: r.youtube_video_id,
-        youtube_video_url: r.youtube_video_url,
-        status: r.status as JobStatus,
-        error_details: r.error_details,
-        retry_count: Number(r.retry_count || 0),
-        max_retries: Number(r.max_retries || 3),
-        detected_at: r.detected_at,
-        completed_at: r.completed_at,
-        shortcode: r.shortcode,
-        rights_confirmed: Boolean(r.rights_confirmed),
-        media_source_type: r.media_source_type,
-        created_at: r.created_at,
-        updated_at: r.updated_at,
-      };
+      return this.mapRowToUploadJob(r);
     }
 
     return (
@@ -1062,6 +1121,21 @@ export class Repository {
         (j) => j.shortcode === clean || j.original_reel_url?.includes(clean)
       ) || null
     );
+  }
+
+  static async getUploadJobByReelId(reelId: string): Promise<UploadJob | null> {
+    const clean = reelId.trim();
+    const d1 = getD1Database();
+    if (d1) {
+      const r = await d1
+        .prepare('SELECT * FROM upload_jobs WHERE reel_id = ? LIMIT 1')
+        .bind(clean)
+        .first<any>();
+      if (!r) return null;
+      return this.mapRowToUploadJob(r);
+    }
+
+    return store.uploadJobs.find((j) => j.reel_id === clean) || null;
   }
 
   static async getUploadJobByOriginalUrl(url: string): Promise<UploadJob | null> {
@@ -1073,30 +1147,7 @@ export class Repository {
         .bind(clean)
         .first<any>();
       if (!r) return null;
-      return {
-        id: r.id,
-        reel_id: r.reel_id,
-        instagram_account_id: r.profile_id || '',
-        account_username: r.account_username,
-        caption: r.caption || '',
-        thumbnail_url: r.thumbnail_url || '',
-        original_reel_url: r.original_reel_url,
-        drive_file_id: r.drive_file_id,
-        drive_file_url: r.drive_file_url,
-        youtube_video_id: r.youtube_video_id,
-        youtube_video_url: r.youtube_video_url,
-        status: r.status as JobStatus,
-        error_details: r.error_details,
-        retry_count: Number(r.retry_count || 0),
-        max_retries: Number(r.max_retries || 3),
-        detected_at: r.detected_at,
-        completed_at: r.completed_at,
-        shortcode: r.shortcode,
-        rights_confirmed: Boolean(r.rights_confirmed),
-        media_source_type: r.media_source_type,
-        created_at: r.created_at,
-        updated_at: r.updated_at,
-      };
+      return this.mapRowToUploadJob(r);
     }
 
     return store.uploadJobs.find((j) => j.original_reel_url?.toLowerCase() === clean) || null;
@@ -1118,12 +1169,13 @@ export class Repository {
       drive_file_url: job.drive_file_url || null,
       youtube_video_id: job.youtube_video_id || null,
       youtube_video_url: job.youtube_video_url || null,
+      encrypted_youtube_upload_session_uri: job.encrypted_youtube_upload_session_uri || null,
       status: job.status || 'SUBMITTED',
       error_details: job.error_details || null,
-      retry_count: 0,
-      max_retries: 3,
+      retry_count: job.retry_count ?? 0,
+      max_retries: job.max_retries ?? 3,
       detected_at: job.detected_at || now,
-      completed_at: null,
+      completed_at: job.completed_at || null,
       shortcode: job.shortcode,
       rights_confirmed: job.rights_confirmed,
       media_source_type: job.media_source_type || 'PUBLIC_PROBE',
@@ -1133,15 +1185,15 @@ export class Repository {
 
     const d1 = getD1Database();
     if (d1) {
-      await d1
+      const res = await d1
         .prepare(`
-          INSERT INTO upload_jobs (
+          INSERT OR IGNORE INTO upload_jobs (
             id, reel_id, profile_id, account_username, caption,
             thumbnail_url, original_reel_url, shortcode, media_source_type,
             rights_confirmed, drive_file_id, drive_file_url, youtube_video_id,
-            youtube_video_url, status, error_details, retry_count, max_retries,
+            youtube_video_url, encrypted_youtube_upload_session_uri, status, error_details, retry_count, max_retries,
             detected_at, completed_at, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `)
         .bind(
           newJob.id,
@@ -1158,6 +1210,7 @@ export class Repository {
           newJob.drive_file_url,
           newJob.youtube_video_id,
           newJob.youtube_video_url,
+          newJob.encrypted_youtube_upload_session_uri || null,
           newJob.status,
           newJob.error_details,
           newJob.retry_count,
@@ -1169,8 +1222,26 @@ export class Repository {
         )
         .run();
 
+      // If an existing record was not inserted due to unique constraint, retrieve and return canonical job
+      if ((res.meta.changes || 0) === 0) {
+        const existing =
+          (newJob.shortcode ? await this.getUploadJobByShortcode(newJob.shortcode) : null) ||
+          (await this.getUploadJobByReelId(newJob.reel_id));
+        if (existing) {
+          return existing;
+        }
+      }
+
       return newJob;
     }
+
+    // In-memory fallback
+    if (newJob.shortcode) {
+      const existingByShortcode = store.uploadJobs.find((j) => j.shortcode === newJob.shortcode);
+      if (existingByShortcode) return existingByShortcode;
+    }
+    const existingByReel = store.uploadJobs.find((j) => j.reel_id === newJob.reel_id);
+    if (existingByReel) return existingByReel;
 
     store.uploadJobs.unshift(newJob);
     return newJob;
@@ -1197,7 +1268,8 @@ export class Repository {
           UPDATE upload_jobs
           SET caption = ?, thumbnail_url = ?, status = ?, drive_file_id = ?,
               drive_file_url = ?, youtube_video_id = ?, youtube_video_url = ?,
-              error_details = ?, retry_count = ?, completed_at = ?, account_username = ?, updated_at = ?
+              encrypted_youtube_upload_session_uri = ?, error_details = ?, retry_count = ?,
+              completed_at = ?, account_username = ?, updated_at = ?
           WHERE id = ?
         `)
         .bind(
@@ -1208,6 +1280,7 @@ export class Repository {
           updated.drive_file_url,
           updated.youtube_video_id,
           updated.youtube_video_url,
+          updated.encrypted_youtube_upload_session_uri || null,
           updated.error_details,
           updated.retry_count,
           updated.completed_at,

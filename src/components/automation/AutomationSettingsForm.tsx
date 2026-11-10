@@ -70,7 +70,7 @@ export function AutomationSettingsForm({
         }),
       });
 
-      const data = await res.json();
+      const data = (await res.json()) as { success: boolean; error?: string };
       if (data.success) {
         setSaveSuccess(true);
         setTimeout(() => setSaveSuccess(false), 2500);
@@ -89,9 +89,9 @@ export function AutomationSettingsForm({
     try {
       setSyncing(true);
       const res = await fetch('/api/automation/sync-now', { method: 'POST' });
-      const data = await res.json();
+      const data = (await res.json()) as { success: boolean; message?: string; error?: string };
       if (data.success) {
-        alert(data.message);
+        alert(data.message || 'Sync completed');
         onUpdate();
       } else {
         alert(data.error || 'Manual sync failed');

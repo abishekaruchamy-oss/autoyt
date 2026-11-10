@@ -13,9 +13,17 @@ export async function GET() {
   }
 }
 
+interface CreateAccountPayload {
+  username?: string;
+  name?: string;
+  instagram_user_id?: string;
+  profile_picture_url?: string;
+  raw_token?: string;
+}
+
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    const body = (await request.json()) as CreateAccountPayload;
     const { username, name, instagram_user_id, profile_picture_url, raw_token } = body;
 
     if (!username) {

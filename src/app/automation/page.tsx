@@ -18,13 +18,13 @@ export default function AutomationPage() {
         fetch('/api/accounts'),
       ]);
 
-      const autoData = await autoRes.json();
-      const accData = await accRes.json();
+      const autoData = (await autoRes.json()) as { success: boolean; automation?: AutomationSettings };
+      const accData = (await accRes.json()) as { success: boolean; accounts?: InstagramAccount[] };
 
-      if (autoData.success) {
+      if (autoData.success && autoData.automation) {
         setAutomation(autoData.automation);
       }
-      if (accData.success) {
+      if (accData.success && accData.accounts) {
         setAccounts(accData.accounts);
       }
     } catch (err) {

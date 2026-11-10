@@ -57,7 +57,7 @@ export function UploadHistoryTable({
     try {
       setRetryingId(jobId);
       const res = await fetch(`/api/uploads/${jobId}/retry`, { method: 'POST' });
-      const data = await res.json();
+      const data = (await res.json()) as { success: boolean; error?: string };
       if (data.success) {
         onJobRetried();
       } else {
@@ -255,7 +255,7 @@ export function UploadHistoryTable({
                           >
                             <Info className="w-4 h-4" />
                           </button>
-                          {job.status === 'FAILED' && (
+                          {(job.status === 'FAILED' || job.status === 'AMBIGUOUS_UPLOAD') && (
                             <button
                               type="button"
                               onClick={() => handleRetry(job.id)}
@@ -263,7 +263,7 @@ export function UploadHistoryTable({
                               className="px-2.5 py-1 bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors disabled:opacity-50"
                             >
                               <RotateCcw className={`w-3 h-3 ${isRetrying ? 'animate-spin' : ''}`} />
-                              <span>{isRetrying ? 'Retrying...' : 'Retry'}</span>
+                              <span>{isRetrying ? 'Retrying...' : job.status === 'AMBIGUOUS_UPLOAD' ? 'Reconcile' : 'Retry'}</span>
                             </button>
                           )}
                         </div>
@@ -359,7 +359,7 @@ export function UploadHistoryTable({
                     )}
                   </div>
 
-                  {job.status === 'FAILED' && (
+                  {(job.status === 'FAILED' || job.status === 'AMBIGUOUS_UPLOAD') && (
                     <button
                       type="button"
                       onClick={() => handleRetry(job.id)}
@@ -367,7 +367,7 @@ export function UploadHistoryTable({
                       className="px-3 py-1 bg-rose-600 text-white rounded-lg text-xs font-semibold flex items-center gap-1 shadow-sm disabled:opacity-50"
                     >
                       <RotateCcw className={`w-3 h-3 ${isRetrying ? 'animate-spin' : ''}`} />
-                      <span>{isRetrying ? 'Retrying...' : 'Retry'}</span>
+                      <span>{isRetrying ? 'Retrying...' : job.status === 'AMBIGUOUS_UPLOAD' ? 'Reconcile' : 'Retry'}</span>
                     </button>
                   )}
                 </div>
