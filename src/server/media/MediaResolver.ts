@@ -113,6 +113,71 @@ export function extractReelShortcode(input: string): {
 }
 
 /**
+ * Strict SSRF & Domain Validation for direct video streams.
+ * Rejects private, loopback, link-local, and non-HTTPS protocols to prevent SSRF.
+ */
+export function isValidPublicMediaUrl(
+  inputUrl?: string,
+  options?: { allowLocalhost?: boolean }
+): { isValid: boolean; error?: string } {
+  if (!inputUrl || typeof inputUrl !== 'string') {
+    return { isValid: false, error: 'Direct media URL is empty' };
+  }
+
+  try {
+    const parsed = new URL(inputUrl);
+    // Protocol must be https: or http:
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return { isValid: false, error: `Invalid protocol: "${parsed.protocol}". Must be https://` };
+    }
+
+    const host = parsed.hostname.toLowerCase();
+
+    // Allow loopback only in explicit test environments
+    const allowLocal =
+      options?.allowLocalhost ||
+      process.env.NODE_ENV === 'test' ||
+      Boolean(process.env.AUTOSHORTS_TEST_MODE);
+    if (allowLocal && (host === 'localhost' || host === '127.0.0.1')) {
+      return { isValid: true };
+    }
+
+    // Block loopback and internal hostnames
+    if (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '0.0.0.0' ||
+      host === '::1' ||
+      host === '[::1]' ||
+      host.endsWith('.local') ||
+      host.endsWith('.internal')
+    ) {
+      return { isValid: false, error: `Internal loopback host "${host}" is not permitted.` };
+    }
+
+    // Block AWS/GCP/Azure link-local cloud metadata endpoints (169.254.169.254)
+    if (host.startsWith('169.254.') || host === 'metadata.google.internal') {
+      return { isValid: false, error: 'Cloud metadata service access is forbidden.' };
+    }
+
+    // Block private RFC 1918 IPv4 ranges
+    if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) {
+      return { isValid: false, error: 'Private class A IP address is not permitted.' };
+    }
+    if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(host)) {
+      return { isValid: false, error: 'Private class B IP address is not permitted.' };
+    }
+    if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(host)) {
+      return { isValid: false, error: 'Private class C IP address is not permitted.' };
+    }
+
+    return { isValid: true };
+  } catch {
+    return { isValid: false, error: 'Invalid URL format' };
+  }
+}
+
+/**
  * Provider 1: Creator-Authorized Direct Video URL Provider
  * When the user or creator supplies an authorized direct media stream link (e.g. S3, R2, CDN).
  */
@@ -120,10 +185,24 @@ export class CreatorAuthorizedUrlProvider implements IMediaProvider {
   readonly providerName = 'CREATOR_AUTHORIZED_URL';
 
   canResolve(url: string, options?: { directVideoUrl?: string }): boolean {
-    return Boolean(options?.directVideoUrl && options.directVideoUrl.startsWith('http'));
+    if (!options?.directVideoUrl) return false;
+    return isValidPublicMediaUrl(options.directVideoUrl).isValid;
   }
 
   async resolve(url: string, shortcode: string, options: { directVideoUrl: string; caption?: string; username?: string }): Promise<MediaResolutionResult> {
+    const urlCheck = isValidPublicMediaUrl(options.directVideoUrl);
+    if (!urlCheck.isValid) {
+      return {
+        success: false,
+        shortcode,
+        canonicalUrl: `https://www.instagram.com/reel/${shortcode}/`,
+        provider: 'CREATOR_AUTHORIZED_URL',
+        status: 'ERROR',
+        reason: `SSRF Security rejection: ${urlCheck.error}`,
+        requiresManualMedia: true,
+      };
+    }
+
     return {
       success: true,
       shortcode,
@@ -146,7 +225,9 @@ export class UserDirectStreamProvider implements IMediaProvider {
   readonly providerName = 'USER_DIRECT_STREAM';
 
   canResolve(url: string, options?: { directVideoUrl?: string; driveFileId?: string }): boolean {
-    return Boolean(options?.directVideoUrl || options?.driveFileId);
+    if (options?.driveFileId) return true;
+    if (options?.directVideoUrl) return isValidPublicMediaUrl(options.directVideoUrl).isValid;
+    return false;
   }
 
   async resolve(url: string, shortcode: string, options?: any): Promise<MediaResolutionResult> {
@@ -161,6 +242,21 @@ export class UserDirectStreamProvider implements IMediaProvider {
         reason: 'Authorized Google Drive video file attached.',
         requiresManualMedia: false,
       };
+    }
+
+    if (options?.directVideoUrl) {
+      const urlCheck = isValidPublicMediaUrl(options.directVideoUrl);
+      if (!urlCheck.isValid) {
+        return {
+          success: false,
+          shortcode,
+          canonicalUrl: `https://www.instagram.com/reel/${shortcode}/`,
+          provider: 'USER_DIRECT_STREAM',
+          status: 'ERROR',
+          reason: `SSRF Security rejection: ${urlCheck.error}`,
+          requiresManualMedia: true,
+        };
+      }
     }
 
     return {

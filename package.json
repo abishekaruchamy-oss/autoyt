@@ -15,6 +15,7 @@
     "test:experiment": "tsx tests/first-live-experiment-zackdfilms.ts",
     "test:reel-retrieval": "tsx tests/test-reel-dff42ifnipz.ts",
     "test:reclip": "tsx tests/phase3-4-reclip-ytdlp.ts",
+    "test:phase3-5": "tsx tests/phase3-5-real-drive-and-background.ts",
     "test:all": "tsx tests/test-suite.ts && tsx tests/production-readiness-audit.ts && tsx tests/phase3-submission-engine.ts",
     "clean": "node scripts/clean.js"
   },

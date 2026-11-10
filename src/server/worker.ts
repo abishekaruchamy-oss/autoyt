@@ -29,6 +29,22 @@ export interface ScheduledEvent {
   scheduledTime: number;
 }
 
+const submissionRateLimits = new Map<string, { count: number; resetAt: number }>();
+
+function checkRateLimit(ip: string, limit = 30, windowMs = 60000): boolean {
+  const now = Date.now();
+  const entry = submissionRateLimits.get(ip);
+  if (!entry || now > entry.resetAt) {
+    submissionRateLimits.set(ip, { count: 1, resetAt: now + windowMs });
+    return true;
+  }
+  if (entry.count >= limit) {
+    return false;
+  }
+  entry.count++;
+  return true;
+}
+
 export default {
   /**
    * HTTP Request Router for Cloudflare Worker
@@ -184,6 +200,17 @@ export default {
 
       // 8. Reel Direct Submission Engine (Phase 3B)
       if (path === '/api/reels/submit' && method === 'POST') {
+        const clientIp =
+          request.headers.get('cf-connecting-ip') ||
+          request.headers.get('x-forwarded-for') ||
+          '127.0.0.1';
+        if (!checkRateLimit(clientIp)) {
+          return new Response(
+            JSON.stringify({ success: false, error: 'Rate limit exceeded. Maximum 30 submissions per minute.' }),
+            { status: 429, headers: { ...jsonHeaders, 'Retry-After': '60' } }
+          );
+        }
+
         const body = (await request.json()) as any;
         if (!body.reelUrl) {
           return new Response(

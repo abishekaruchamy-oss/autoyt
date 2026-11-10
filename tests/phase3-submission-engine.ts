@@ -21,6 +21,7 @@ import { encryptToken } from '../src/lib/crypto';
 import cloudflareWorker from '../src/server/worker';
 
 async function runPhase3Tests() {
+  process.env.NODE_ENV = 'test';
   console.log('================================================================');
   console.log('AUTOSHORTS PHASE 3 – REEL URL AUTOMATION TEST SUITE');
   console.log('================================================================\n');

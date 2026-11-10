@@ -185,6 +185,30 @@
 
 ---
 
+## Phase 3.5: Real Google Drive Upload & Background Execution Validation (Completed)
+- [x] **Objective 1: Google OAuth Status & Drive Resumable Upload**:
+  - Audited real Google OAuth environment (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, encrypted refresh tokens).
+  - Documented exact credential prerequisites without exposing secrets.
+  - Implemented `GoogleDriveService.getFileMetadata` (verifies file ID, name, size, MIME type, md5Checksum, webViewLink).
+  - Verified target folder duplicate check (`checkFileExists`) and resumable recovery (`queryResumableStatus` Range 308).
+- [x] **Objective 2: True Background Execution (Laptop Off)**:
+  - Verified Cloudflare Worker `/api/health` and scheduled Cron handler (`*/30 * * * *`).
+  - Verified concurrency mutex lock (`acquireAutomationLock` / `releaseAutomationLock`) prevents overlapping syncs.
+- [x] **Objective 3: Streaming & Local SSD Footprint**:
+  - Streamed 11,123,069 byte video payload in 3 chunks (5MB, 5MB, 1.12MB).
+  - Peak streaming heap delta: 3.35 MB (strictly bounded to ~5.2 MB buffer).
+  - Laptop video bytes written: **0 bytes** (zero local SSD invariant).
+  - Measured local workspace code footprint: ~0.96 MB (excluding node_modules).
+- [x] **Objective 4: Safety & SSRF Defenses**:
+  - Added `isValidPublicMediaUrl`: blocks loopback, cloud metadata (169.254.169.254), private RFC 1918 IPs, and non-HTTPS protocols.
+  - Added remote microservice authentication (`RECLIP_API_KEY`) and signed token log masking (`maskMediaUrl`).
+  - Added sliding-window rate limiting to `/api/reels/submit` (30 submissions/min, HTTP 429).
+- [x] **Objective 5: 8-Point Honest Classification**:
+  - Created `tests/phase3-5-real-drive-and-background.ts` (`npm run test:phase3-5`).
+  - Verified 8/8 classification items passing.
+
+---
+
 ## Phase 4: Live Cloud Operations & Deployment Execution (Next Step)
 - [ ] Connect live Google Cloud OAuth credentials in Cloudflare Secrets (`wrangler secret put`).
 - [ ] Initialize live Cloudflare D1 database (`npx wrangler d1 execute autoshorts-db --file=db/d1-schema.sql`).

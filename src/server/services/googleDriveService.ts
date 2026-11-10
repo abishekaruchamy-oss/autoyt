@@ -13,7 +13,44 @@ export interface DriveResumableStatus {
   bytesReceived: number;
 }
 
+export interface DriveFileMetadata {
+  id: string;
+  name: string;
+  sizeBytes: number;
+  mimeType: string;
+  md5Checksum?: string;
+  webViewLink?: string;
+  webContentLink?: string;
+  trashed: boolean;
+}
+
 export class GoogleDriveService {
+  /**
+   * Retrieves verified file metadata (size, MIME type, md5 checksum) from Google Drive API
+   */
+  static async getFileMetadata(fileId: string, accessToken: string): Promise<DriveFileMetadata> {
+    const fields = 'id,name,size,mimeType,md5Checksum,webViewLink,webContentLink,trashed';
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=${encodeURIComponent(fields)}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Failed to fetch Drive file metadata for ${fileId}: ${err}`);
+    }
+
+    const data = await res.json();
+    return {
+      id: data.id,
+      name: data.name,
+      sizeBytes: data.size ? parseInt(data.size, 10) : 0,
+      mimeType: data.mimeType || 'unknown',
+      md5Checksum: data.md5Checksum,
+      webViewLink: data.webViewLink,
+      webContentLink: data.webContentLink,
+      trashed: Boolean(data.trashed),
+    };
+  }
   /**
    * Finds an existing folder by name or creates it in Google Drive root
    */
