@@ -129,7 +129,7 @@ export function createInitialAutomationSettings(): AutomationSettings {
     is_running: false,
     lock_acquired_at: null,
     max_uploads_per_day: 5,
-    default_visibility: 'public',
+    default_visibility: 'private',
     drive_folder_id: 'drive_folder_reels_backup_2026',
     drive_folder_name: 'Instagram Reels Backup',
     created_at: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString(),

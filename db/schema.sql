@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS automation_settings (
     is_running BOOLEAN NOT NULL DEFAULT FALSE,
     lock_acquired_at TIMESTAMPTZ,
     max_uploads_per_day INTEGER NOT NULL DEFAULT 5,
-    default_visibility VARCHAR(20) NOT NULL DEFAULT 'public' CHECK (default_visibility IN ('public', 'unlisted', 'private')),
+    default_visibility VARCHAR(20) NOT NULL DEFAULT 'private' CHECK (default_visibility IN ('public', 'unlisted', 'private')),
     drive_folder_id VARCHAR(255) NOT NULL DEFAULT 'root',
     drive_folder_name VARCHAR(255) NOT NULL DEFAULT 'Instagram Reels Backup',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

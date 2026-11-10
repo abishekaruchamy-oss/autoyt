@@ -682,7 +682,7 @@ export class Repository {
             `INSERT OR IGNORE INTO automation_settings (
               id, is_enabled, polling_interval_minutes, max_uploads_per_day,
               default_visibility, drive_folder_id, drive_folder_name
-            ) VALUES ('default', 1, 30, 5, 'public', 'root', 'Instagram Reels Backup')`
+            ) VALUES ('default', 1, 30, 5, 'private', 'root', 'Instagram Reels Backup')`
           )
           .run();
         row = await d1
@@ -699,7 +699,7 @@ export class Repository {
         is_running: Boolean(row.is_running),
         lock_acquired_at: row.lock_acquired_at,
         max_uploads_per_day: Number(row.max_uploads_per_day || 5),
-        default_visibility: row.default_visibility || 'public',
+        default_visibility: row.default_visibility || 'private',
         drive_folder_id: row.drive_folder_id || 'root',
         drive_folder_name: row.drive_folder_name || 'Instagram Reels Backup',
         created_at: row.created_at,

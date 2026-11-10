@@ -63,7 +63,7 @@ INSERT INTO automation_settings (
     NOW() - INTERVAL '14 minutes',
     FALSE,
     5,
-    'public',
+    'private',
     'drive_folder_reels_backup_2026',
     'Instagram Reels Backup'
 )

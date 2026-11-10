@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS automation_settings (
     is_running INTEGER NOT NULL DEFAULT 0,
     lock_acquired_at TEXT,
     max_uploads_per_day INTEGER NOT NULL DEFAULT 5,
-    default_visibility TEXT NOT NULL DEFAULT 'public' CHECK (default_visibility IN ('public', 'unlisted', 'private')),
+    default_visibility TEXT NOT NULL DEFAULT 'private' CHECK (default_visibility IN ('public', 'unlisted', 'private')),
     drive_folder_id TEXT NOT NULL DEFAULT 'root',
     drive_folder_name TEXT NOT NULL DEFAULT 'Instagram Reels Backup',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -141,7 +141,7 @@ INSERT OR IGNORE INTO automation_settings (
     id, is_enabled, polling_interval_minutes, max_uploads_per_day,
     default_visibility, drive_folder_id, drive_folder_name
 ) VALUES (
-    'default', 1, 30, 5, 'public', 'root', 'Instagram Reels Backup'
+    'default', 1, 30, 5, 'private', 'root', 'Instagram Reels Backup'
 );
 
 INSERT OR IGNORE INTO integrations_config (service_name, is_connected, config_data)

@@ -21,6 +21,7 @@
 /build
 /.open-next/
 cloudflare-env.d.ts
+worker-configuration.d.ts
 
 # misc
 .DS_Store
