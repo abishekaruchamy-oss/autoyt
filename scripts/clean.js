@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-const targets = ['.next', 'out', 'tests/fixtures', '.turbo'];
+const targets = ['.next', 'out', 'tests/fixtures', '.turbo', '.open-next'];
 
 for (const target of targets) {
   const fullPath = path.join(__dirname, '..', target);

@@ -13,8 +13,25 @@
  * - Remote / Serverless Ready: Supports remote microservice (RECLIP_SERVICE_URL) or local CLI.
  */
 
-import { execFile } from 'child_process';
 import { IMediaProvider, MediaResolutionResult } from './MediaResolver';
+
+/**
+ * Safely loads execFile only in Node.js runtime without breaking Cloudflare Worker bundlers.
+ */
+async function getExecFile(): Promise<any> {
+  if (typeof process === 'undefined' || !process.versions?.node) {
+    throw new Error(
+      'Local yt-dlp CLI is only supported in Node.js container/CLI runtimes. In Cloudflare Workers, please set RECLIP_SERVICE_URL to connect to your remote media worker.'
+    );
+  }
+  try {
+    const moduleName = 'child_process';
+    const cp = await import(/* webpackIgnore: true */ moduleName);
+    return cp.execFile;
+  } catch (e) {
+    throw new Error(`Failed to load child_process: ${(e as Error).message}`);
+  }
+}
 
 export interface YtDlpFormat {
   format_id?: string;
@@ -175,7 +192,8 @@ export class ReClipYtDlpProvider implements IMediaProvider {
   /**
    * Invokes yt-dlp via CLI with arguments ensuring zero disk downloads.
    */
-  private queryLocalYtDlpCli(url: string, timeoutMs: number): Promise<YtDlpInfo> {
+  private async queryLocalYtDlpCli(url: string, timeoutMs: number): Promise<YtDlpInfo> {
+    const execFile = await getExecFile();
     return new Promise((resolve, reject) => {
       // Execute with args: --no-playlist -j (prints JSON only, no media downloaded)
       const args = ['--no-playlist', '-j', '--no-warnings', url];

@@ -1,160 +1,162 @@
 # Deployment Guide: Cloudflare Target Architecture
 
-This guide covers deployment of AutoShorts to **Cloudflare (Workers, D1, Cron)** and Google Cloud APIs.
+This guide covers the verified production deployment of **AutoShorts** to **Cloudflare (Workers, D1, Cron, Assets)**, **Remote Media Worker**, and **Google Cloud APIs**.
 
 ---
 
-## 1. Cloudflare Production Architecture
+## 1. Unified Cloudflare Production Architecture
 
-### Full-Stack Next.js Deployment Reality
-> [!IMPORTANT]
-> **Do not use `wrangler pages deploy .next` as a deployment shortcut.**
-> Next.js App Router applications (`.next`) compile dynamic routes into Node.js server bundles (`.next/server`). Cloudflare Pages static hosting cannot execute Node.js server code without a serverless worker adapter.
+AutoShorts uses **Next.js 16.4.5** on Cloudflare Workers powered by **OpenNext Cloudflare adapter** (`@opennextjs/cloudflare` v1.20.16) and a unified entry point [`worker/index.ts`](file:///c:/Users/Abishek/OneDrive/Desktop/n8n/worker/index.ts):
 
-AutoShorts provides two supported production deployment paths:
-
-### Path A: Cloudflare Worker Runtime (`src/server/worker.ts`) – Recommended
-The repository includes a native Cloudflare Worker entry point [src/server/worker.ts](file:///c:/Users/Abishek/OneDrive/Desktop/n8n/src/server/worker.ts):
-- **API & OAuth Routes**: Handled via `fetch()` router with standard Web APIs and `nodejs_compat`.
-- **Scheduled Automation**: Cloudflare Cron (`triggers.crons = ["*/30 * * * *"]`) calls `scheduled()`, executing `PipelineService.runSync()` inside `ctx.waitUntil()`.
-- **D1 Database Binding**: Bound directly via `env.DB`.
-- **Environment Secrets**: Injected into `env` at runtime (`wrangler secret put`).
-- **Dashboard UI**: Static frontend pages exported to Cloudflare Pages or Cloudflare Workers Static Assets.
-
-### Path B: OpenNext on Cloudflare Workers
-OpenNext (`@opennextjs/cloudflare`) compiles Next.js App Router for Cloudflare Workers. Note that OpenNext currently officially targets Next.js 14.x and 15.x LTS. When deploying Next.js 16 (React 19), use Path A (native worker router) to guarantee stability.
-
----
-
-## 2. Google Cloud OAuth & Consent Screen Setup
-
-### 2.1 API Configuration
-1. Open [Google Cloud Console](https://console.cloud.google.com/).
-2. Enable both required APIs:
-   - **Google Drive API**
-   - **YouTube Data API v3**
-
-### 2.2 The 7-Day Refresh Token Rule & Publishing Status
-> [!WARNING]
-> In Google Cloud Console, if your OAuth Consent Screen has:
-> - **User Type: External** AND
-> - **Publishing Status: Testing**
-> 
-> Google **automatically expires all refresh tokens after 7 days** (168 hours). Background automations will fail after 7 days with `invalid_grant`.
-
-To prevent 7-day token expiration:
-- **Option 1 (For Organization / Workspace)**: Set **User Type: Internal**. Refresh tokens never expire, and Google App Verification is not required.
-- **Option 2 (For Public / Personal Google Account)**: Move Publishing Status to **"In Production"**. Because `youtube.upload` and `youtube.readonly` are Sensitive Scopes, Google requires App Verification:
-  1. Add domain verification in Google Search Console.
-  2. Provide links to your Privacy Policy and Terms of Service.
-  3. Submit a YouTube API Services compliance audit form with a short video demonstration showing how the application uses the requested scopes.
-
-### 2.3 Create OAuth 2.0 Client Credentials
-1. Under **Credentials**, create an **OAuth 2.0 Client ID** (Web application).
-2. Authorized Redirect URIs:
-   - Local: `http://localhost:3000/api/auth/google/callback`
-   - Production: `https://<your-worker-or-pages-domain>/api/auth/google/callback`
-3. Note `Client ID` and `Client Secret`.
-
----
-
-## 3. YouTube Daily Upload Limits & Bucket Configuration
-
-- YouTube Data API v3 maintains a **dedicated video upload limit bucket** (default documented limit is **approximately 100 video upload calls per day** per project/channel), separate from the general 10,000 daily project quota units.
-- AutoShorts enforces a configurable daily safety ceiling (default: **`max_uploads_per_day: 5`**). This is an automation pacing throttle to protect newly created or connected creator channels from triggering YouTube's algorithmic spam review. It can be adjusted in Settings.
-
----
-
-## 4. Cloudflare D1 Serverless Database Setup
-
-1. Install Wrangler and authenticate:
-   ```bash
-   npm install -g wrangler
-   wrangler login
-   ```
-2. Create D1 database:
-   ```bash
-   npx wrangler d1 create autoshorts-db
-   ```
-3. Copy the generated `database_id` into `wrangler.toml`:
-   ```toml
-   [[d1_databases]]
-   binding = "DB"
-   database_name = "autoshorts-db"
-   database_id = "<your-database-id>"
-   ```
-4. Execute the schema migration against D1:
-   ```bash
-   npx wrangler d1 execute autoshorts-db --file=./db/d1-schema.sql
-   ```
-
----
-
-## 5. Environment Secrets Configuration
-
-Upload sensitive credentials to Cloudflare Workers using Wrangler:
-
-```bash
-npx wrangler secret put GOOGLE_CLIENT_ID
-npx wrangler secret put GOOGLE_CLIENT_SECRET
-npx wrangler secret put TOKEN_ENCRYPTION_KEY
+```
+                                  Cloudflare Global Edge
+            ┌──────────────────────────────────────────────────────────────────┐
+            │                     Cloudflare Worker Engine                     │
+            │                         (worker/index.ts)                        │
+            ├────────────────────────────────┬─────────────────────────────────┤
+            │        HTTP Request Router     │     Cron Triggers (Scheduled)   │
+            │      Delegates to OpenNext     │      "*/30 * * * *" (Every 30m) │
+            │      (.open-next/worker.js)    │   PipelineService.runSync()     │
+            ├───────────────┬────────────────┴─────────────────────────────────┤
+            │ App Router UI │ API Routes (/api/*) & OAuth Handlers             │
+            │ React 19 SSR  │ AES-256-GCM Token Encryption                     │
+            │ Static Assets │ Mutex Concurrency Locks                          │
+            └───────┬───────┴──────────────┬───────────────────────────┬───────┘
+                    │                      │                           │
+          Workers Static Assets      Cloudflare D1 SQL            Remote Worker
+           (.open-next/assets)      (Serverless SQLite)         (yt-dlp microservice)
+                    │                      │                           │
+            Global CDN Cache       Monitored Profiles           Zero-SSD RAM
+                                   Reels, Jobs, Logs            Stream Extractor
 ```
 
-> [!NOTE]
-> Generate a secure 32-byte (64 hex characters) encryption key:
-> ```bash
-> node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-> ```
+### Architectural Invariants Satisfied:
+1. **Laptop-Off Autonomous Execution**: Cloudflare Cron Triggers execute independently on the edge every 30 minutes without requiring an active browser or laptop session.
+2. **Near-Zero SSD Footprint**: All media streaming is executed in-memory or delegated to a remote media worker. No local MP4 files or persistent database files are stored on the host SSD.
+3. **OpenNext Next.js 16 Runtime**: Full support for App Router pages (`/`, `/accounts`, `/automation`, `/profiles`, `/settings`, `/submit-reel`, `/uploads`), React Server Components, and Next.js Route Handlers.
+4. **Unified Entry Point (`worker/index.ts`)**: Resolves the previous conflict where `wrangler.toml` bypassed Next.js pages. Both HTTP requests and Cron events are handled in a single unified Worker.
 
 ---
 
-## 6. Deployment Commands
+## 2. Cloudflare D1 Serverless Database Setup
 
-1. Run all test suites:
-   ```bash
-   npm run test:all
-   ```
-2. Deploy the serverless worker:
-   ```bash
-   npx wrangler deploy
-   ```
-3. Verify production health:
-   ```bash
-   curl https://<your-subdomain>.workers.dev/api/health
-   ```
-   Expected response:
-   ```json
-   {
-     "status": "healthy",
-     "version": "2.1.0",
-     "environment": "cloudflare-worker",
-     "database": { "mode": "Cloudflare D1 (Bound)", "connected": true }
-   }
-   ```
+> [!IMPORTANT]
+> **Do not use placeholder D1 database IDs in version control.**
+> Cloudflare requires a valid UUID generated for your account.
+
+### Step 2.1: Authenticate Wrangler
+```bash
+npx wrangler login
+```
+
+### Step 2.2: Create the Production D1 Database
+Execute the creation command:
+```bash
+npx wrangler d1 create autoshorts-db
+```
+Wrangler will output configuration similar to:
+```toml
+[[d1_databases]]
+binding = "DB"
+database_name = "autoshorts-db"
+database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+```
+
+### Step 2.3: Bind the D1 Database
+Open [`wrangler.jsonc`](file:///c:/Users/Abishek/OneDrive/Desktop/n8n/wrangler.jsonc) (or [`wrangler.toml`](file:///c:/Users/Abishek/OneDrive/Desktop/n8n/wrangler.toml)) and insert the generated UUID:
+
+In `wrangler.jsonc`:
+```jsonc
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "autoshorts-db",
+      "database_id": "YOUR_ACTUAL_D1_UUID_HERE"
+    }
+  ],
+```
+
+### Step 2.4: Execute D1 Schema Migrations
+Apply the production database tables, indexes, and initial constraints:
+```bash
+# Run schema migration against remote Cloudflare D1
+npm run d1:migrate
+
+# For local development testing (optional):
+npm run d1:migrate:local
+```
 
 ---
 
-## 7. Cloud-First Development & Minimum Local SSD Policy
+## 3. Environment Secrets Configuration
 
-> [!CRITICAL]
-> **Permanent Architectural Rule**: The developer or user's laptop SSD must not be used as project video storage or media-processing storage. The goal is **near-zero laptop SSD consumption**.
+All sensitive keys are stored securely in Cloudflare's encrypted key-value store using `wrangler secret put`. **Never commit secrets to GitHub or version control.**
 
-### 7.1 Remote Development Workflow (Recommended)
-1. **Host Canonical Code on GitHub**:
-   - Push code to a remote GitHub repository.
-2. **Standardized Dev Container & GitHub Codespaces**:
-   - The repository includes `.devcontainer/devcontainer.json` preconfigured with Node.js 20 LTS, TypeScript, and port forwards for Next.js (`3000`) and Cloudflare Worker runtime (`8787`).
-   - GitHub Actions (`.github/workflows/remote-verify.yml`) automatically executes remote verification (TypeScript checks, 24 test suites, and Next.js build) upon push.
-   - Run dependency installation (`npm install`), compilation (`npm run build`), test execution (`npm test`), and deployment (`wrangler deploy`) directly in GitHub Codespaces.
-   - The user's laptop is used strictly as a browser client, placing **zero build artifact or cache load on the local SSD**.
+Run each command and paste the corresponding secret when prompted:
 
-### 7.2 Local Development with Antigravity
-When Antigravity runs locally:
-- **Zero Local Media Files**: Do not download video files to the machine. Test suites run on in-memory synthetic streams (`createInMemoryTestVideo`).
-- **Post-Development Purge**: After running builds or tests locally, run:
-  ```bash
-  npm run clean
-  ```
-  This immediately removes `.next`, `out`, and `.turbo` build folders from the disk.
-- **OneDrive Sync Protection**: If your workspace resides inside a synced OneDrive folder, exclude `.next` and `node_modules` from sync to prevent background file locks (`EPERM`) and unnecessary cloud storage consumption.
+```bash
+# 1. 256-bit (32-byte) Hex key for AES-256-GCM token encryption at rest
+npx wrangler secret put TOKEN_ENCRYPTION_KEY
 
+# 2. Google OAuth 2.0 Web Client ID
+npx wrangler secret put GOOGLE_CLIENT_ID
+
+# 3. Google OAuth 2.0 Client Secret
+npx wrangler secret put GOOGLE_CLIENT_SECRET
+
+# 4. (Optional) URL of the remote yt-dlp media extraction service
+npx wrangler secret put RECLIP_SERVICE_URL
+```
+
+---
+
+## 4. Google Cloud OAuth & Publishing Configuration
+
+### 4.1 Required Google Cloud APIs
+In [Google Cloud Console](https://console.cloud.google.com/):
+1. Enable **Google Drive API**.
+2. Enable **YouTube Data API v3**.
+
+### 4.2 Authorized Redirect URIs
+In **Credentials** > **OAuth 2.0 Client ID**:
+- Local Development: `http://localhost:3000/api/auth/google/callback`
+- Production Worker: `https://autoshorts.workers.dev/api/auth/google/callback` (or custom domain)
+
+### 4.3 Resolving the 7-Day Refresh Token Expiration
+> [!WARNING]
+> If OAuth Consent Screen is **External** with Publishing Status **Testing**, Google expires refresh tokens after 7 days (168 hours).
+
+- **For Google Workspace Users**: Choose **Internal** (refresh tokens never expire; verification not required).
+- **For Personal Accounts**: Move Publishing Status to **In Production**. Complete YouTube API compliance verification for sensitive scopes (`youtube.upload`, `drive.file`).
+
+---
+
+## 5. Remote Media Worker Architecture (yt-dlp)
+
+Because Cloudflare Workers runs in V8 `workerd` isolates without native OS process execution (`child_process`), yt-dlp runs via one of two supported architectures:
+
+1. **Remote ReClip Microservice (Recommended for Laptop-Off Mode)**:
+   Deploy a lightweight containerized microservice (e.g. on Railway, Render, or Fly.io free tier) running Python + yt-dlp. Configure `RECLIP_SERVICE_URL` in Cloudflare Secrets.
+2. **Direct Submission Engine (Creator Self-Service)**:
+   Submit authorized video URLs or Google Drive file IDs directly via `/submit-reel`. AutoShorts streams the media directly to Google Drive and YouTube without needing local yt-dlp.
+
+---
+
+## 6. Build, Verification & Deployment Commands
+
+```bash
+# 1. Verify TypeScript and Next.js production compilation
+npm run build
+
+# 2. Generate OpenNext Cloudflare Worker bundle (.open-next/worker.js & assets)
+npm run build:worker
+
+# 3. Dry-run deployment verification (tests configuration and asset bundling with 0 cost)
+npm run deploy:dry-run
+
+# 4. Live Cloudflare Production Deployment
+npm run deploy
+
+# 5. Clean up build cache to preserve near-zero host SSD usage
+npm run clean
+```

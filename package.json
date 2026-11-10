@@ -5,6 +5,13 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:worker": "opennextjs-cloudflare build",
+    "preview:worker": "wrangler dev",
+    "deploy:dry-run": "wrangler deploy --dry-run",
+    "deploy": "opennextjs-cloudflare build && wrangler deploy",
+    "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
+    "d1:migrate": "wrangler d1 execute autoshorts-db --remote --file=db/d1-schema.sql",
+    "d1:migrate:local": "wrangler d1 execute autoshorts-db --local --file=db/d1-schema.sql",
     "start": "next start",
     "lint": "eslint",
     "test": "tsx tests/test-suite.ts",
@@ -27,6 +34,7 @@
     "react-dom": "19.3.0"
   },
   "devDependencies": {
+    "@opennextjs/cloudflare": "^1.20.16",
     "@tailwindcss/turbopack": "^4",
     "@types/node": "^20",
     "@types/pg": "^8.23.1",
@@ -36,6 +44,7 @@
     "eslint-config-next": "16.4.5",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
-    "typescript": "^5"
+    "typescript": "^5",
+    "wrangler": "^4.159.0"
   }
 }

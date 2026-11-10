@@ -1,4 +1,4 @@
-import crypto from 'crypto';
+import crypto from 'node:crypto';
 import { encryptToken, decryptToken } from '@/lib/crypto';
 import { Repository } from '../db/repository';
 

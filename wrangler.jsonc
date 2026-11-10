@@ -1,0 +1,37 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "autoshorts",
+  "main": "worker/index.ts",
+  "compatibility_date": "2024-12-30",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "triggers": {
+    "crons": [
+      "*/30 * * * *"
+    ]
+  },
+  "vars": {
+    "NEXT_PUBLIC_APP_URL": "https://autoshorts.workers.dev",
+    "STORAGE_DEFAULT_FOLDER": "Instagram Reels Backup",
+    "POLLING_INTERVAL_MINUTES": "30"
+  }
+  // Note on Cloudflare D1 Database Binding:
+  // To prevent deployment failures caused by placeholder UUIDs, do not commit fake database IDs.
+  // When ready to bind your real D1 database:
+  // 1. Run: npx wrangler d1 create autoshorts-db
+  // 2. Add the generated UUID under "d1_databases":
+  //    "d1_databases": [
+  //      {
+  //        "binding": "DB",
+  //        "database_name": "autoshorts-db",
+  //        "database_id": "<YOUR_D1_DATABASE_UUID>"
+  //      }
+  //    ]
+  // 3. Apply the D1 schema:
+  //    npx wrangler d1 execute autoshorts-db --remote --file=db/d1-schema.sql
+}

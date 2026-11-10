@@ -1,16 +1,32 @@
 # Project Status
 
-**Current Date / Timestamp**: 2026-11-09
+**Current Date / Timestamp**: 2026-11-10
 **Operating Mode**: Autonomous Project Execution
 **Application Name**: AutoShorts (Instagram to YouTube Shorts Automation Platform)
 **Mandatory Architectural Mandate**: **Cloud-First Development & Minimum Local SSD Policy**
-**Current Stage**: **Phase 3.5 — Real Google Drive Upload & Background Execution Validation**
+**Current Stage**: **Cloudflare Production Deployment Preparation**
 
 ---
 
 ## 1. Executive Summary
 
-AutoShorts has validated the end-to-end cloud streaming transfer and background execution architecture for Instagram Reel `https://www.instagram.com/reel/Dff42IfnIPz/` (11,123,069 bytes). The real Google OAuth environment was audited, confirming that credentials and refresh tokens are pending user configuration, with exact prerequisite instructions documented without exposing secrets. The Google Drive resumable streaming protocol was hardened with `GoogleDriveService.getFileMetadata` (validating ID, size, MIME type, md5Checksum), target folder duplicate prevention, and interrupted upload recovery (`queryResumableStatus`). Cloudflare Worker Cron background execution and concurrency mutex locks were verified to run autonomously with the user offline and laptop powered off. Strict SSRF defenses, token masking, and worker rate limiting were implemented and tested.
+AutoShorts has been fully prepared and validated for production deployment on Cloudflare Workers using the supported OpenNext Cloudflare adapter (`@opennextjs/cloudflare` v1.20.16) for Next.js 16.4.5. The previous architectural conflict between the Next.js application entry point and the standalone `wrangler.toml` entry point has been resolved through a unified entrypoint (`worker/index.ts`), which delegates HTTP requests to OpenNext while preserving the 30-minute autonomous Cloudflare Cron trigger (`PipelineService.runSync`). Placeholder D1 database IDs have been replaced with documented creation steps and binding instructions. The media resolution layer (`reclipProvider.ts`) has been hardened for serverless runtimes by abstracting local process execution behind remote media worker support (`RECLIP_SERVICE_URL`). All build, typecheck, dry-run deployment, and regression test suites pass with 100% success while preserving the near-zero local SSD mandate.
+
+---
+
+## 2. Cloudflare Production Deployment Preparation
+
+| Requirement / Component | Implementation & Verification | Status |
+|---|---|---|
+| **1. Next.js 16 OpenNext Adapter** | Configured `@opennextjs/cloudflare` v1.20.16 with `open-next.config.ts` and `initOpenNextCloudflareForDev()` in `next.config.ts`. | `VERIFIED` |
+| **2. Entry Point Conflict Resolution** | Created `worker/index.ts` re-exporting OpenNext `fetch` for App Router SSR, API routes, and assets, while exporting `scheduled` for Cron Triggers. | `VERIFIED` |
+| **3. Asset & Worker Bundling** | `wrangler.jsonc` & `wrangler.toml` configured with `main = "worker/index.ts"`, `compatibility_date = "2024-12-30"`, and `assets = ".open-next/assets"`. | `VERIFIED` |
+| **4. Zero Placeholder D1 IDs** | Removed fake database IDs from configs; documented explicit `npx wrangler d1 create` steps and migration script (`d1:migrate`). | `VERIFIED` |
+| **5. Serverless Media Provider** | Hardened `reclipProvider.ts` to prevent `child_process` bundling errors on Cloudflare Workers while supporting `RECLIP_SERVICE_URL`. | `VERIFIED` |
+| **6. Secret Isolation** | Ensured zero secrets are committed; documented `wrangler secret put` protocol for `TOKEN_ENCRYPTION_KEY`, `GOOGLE_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET`. | `VERIFIED` |
+| **7. Deployment Scripts** | Added `build:worker`, `deploy:dry-run`, `deploy`, `preview:worker`, and `d1:migrate` scripts to `package.json`. | `VERIFIED` |
+| **8. Minimum SSD Invariant** | Added `.open-next` to `.gitignore` and `scripts/clean.js`; build caches cleaned after verification. | `VERIFIED` |
+
 
 ### Verification Status Classification
 - **Unit-Tested**: AES-256-GCM token encryption, URL normalization, YouTube title & description derivation, shortcode extraction (`Dff42IfnIPz`), deduplication store, ReClip line-by-line JSON parsing, URL token masking, SSRF public media validator, worker rate-limiter.

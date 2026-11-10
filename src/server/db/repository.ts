@@ -25,7 +25,7 @@ import {
   PermittedSandboxAdapter,
 } from '../monitoring/adapter';
 import { formatBytes } from '@/lib/utils';
-import crypto from 'crypto';
+import crypto from 'node:crypto';
 
 export interface StoredGoogleCredentials {
   encryptedAccessToken: string;
