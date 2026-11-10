@@ -50,6 +50,7 @@ export default {
    * HTTP Request Router for Cloudflare Worker
    */
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext): Promise<Response> {
+    if (env.DB) Repository.setD1Database(env.DB);
     // Populate environment variables into process.env if running in worker
     if (env.GOOGLE_CLIENT_ID) process.env.GOOGLE_CLIENT_ID = env.GOOGLE_CLIENT_ID;
     if (env.GOOGLE_CLIENT_SECRET) process.env.GOOGLE_CLIENT_SECRET = env.GOOGLE_CLIENT_SECRET;
@@ -152,14 +153,23 @@ export default {
       // 5. Google OAuth Endpoints
       if (path === '/api/auth/google/authorize') {
         const redirectUri = `${url.origin}/api/auth/google/callback`;
-        const { url: authUrl } = getGoogleAuthUrl(redirectUri);
+        const { url: authUrl, state } = getGoogleAuthUrl(redirectUri);
+        await Repository.saveOAuthState(state, redirectUri);
         return Response.redirect(authUrl, 302);
       }
 
       if (path === '/api/auth/google/callback') {
         const code = url.searchParams.get('code');
+        const state = url.searchParams.get('state');
         if (!code) {
-          return new Response(JSON.stringify({ error: 'Missing code' }), { status: 400, headers: jsonHeaders });
+          return new Response(JSON.stringify({ error: 'Missing code parameter' }), { status: 400, headers: jsonHeaders });
+        }
+        if (!state) {
+          return new Response(JSON.stringify({ error: 'Missing state parameter for CSRF verification' }), { status: 400, headers: jsonHeaders });
+        }
+        const isValid = await Repository.validateAndConsumeOAuthState(state);
+        if (!isValid) {
+          return new Response(JSON.stringify({ error: 'Invalid or expired CSRF OAuth state' }), { status: 403, headers: jsonHeaders });
         }
         const redirectUri = `${url.origin}/api/auth/google/callback`;
         const tokens = await exchangeCodeForTokens(code, redirectUri);
@@ -273,6 +283,7 @@ export default {
    * Automatically executes every 30 minutes via Cloudflare Cron
    */
   async scheduled(event: ScheduledEvent, env: CloudflareEnv, ctx: ExecutionContext): Promise<void> {
+    if (env.DB) Repository.setD1Database(env.DB);
     if (env.GOOGLE_CLIENT_ID) process.env.GOOGLE_CLIENT_ID = env.GOOGLE_CLIENT_ID;
     if (env.GOOGLE_CLIENT_SECRET) process.env.GOOGLE_CLIENT_SECRET = env.GOOGLE_CLIENT_SECRET;
     if (env.TOKEN_ENCRYPTION_KEY) process.env.TOKEN_ENCRYPTION_KEY = env.TOKEN_ENCRYPTION_KEY;

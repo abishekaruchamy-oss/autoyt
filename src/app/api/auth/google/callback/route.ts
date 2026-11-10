@@ -3,6 +3,7 @@ import {
   exchangeCodeForTokens,
   saveGoogleCredentials,
 } from '@/server/services/googleAuthService';
+import { Repository } from '@/server/db/repository';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -24,14 +25,21 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // Validate CSRF state
-  if (!cookieState || cookieState !== state) {
-    console.warn('Google OAuth state mismatch');
-    if (process.env.NODE_ENV === 'production') {
-      return NextResponse.redirect(
-        new URL('/settings?error=invalid_csrf_state', request.url)
-      );
-    }
+  // 1. Validate CSRF state against cookie
+  if (!state || !cookieState || cookieState !== state) {
+    console.warn('Google OAuth cookie state mismatch or missing');
+    return NextResponse.redirect(
+      new URL('/settings?error=invalid_csrf_state', request.url)
+    );
+  }
+
+  // 2. Validate and atomically consume state in durable D1 store (prevents replay attacks)
+  const isValidState = await Repository.validateAndConsumeOAuthState(state);
+  if (!isValidState) {
+    console.warn('Google OAuth durable state expired or already consumed');
+    return NextResponse.redirect(
+      new URL('/settings?error=expired_or_invalid_oauth_state', request.url)
+    );
   }
 
   const redirectUri = `${request.nextUrl.origin}/api/auth/google/callback`;

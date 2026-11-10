@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS automation_settings (
 -- 3. Reels Metadata & Deduplication Store
 CREATE TABLE IF NOT EXISTS reels (
     id TEXT PRIMARY KEY,
-    profile_id TEXT NOT NULL REFERENCES monitored_profiles(id) ON DELETE CASCADE,
+    profile_id TEXT REFERENCES monitored_profiles(id) ON DELETE SET NULL,
     reel_id TEXT NOT NULL UNIQUE, -- Composite or canonical Instagram Media ID for deduplication
     caption TEXT,
     permalink TEXT NOT NULL,
@@ -53,12 +53,13 @@ CREATE TABLE IF NOT EXISTS reels (
 
 CREATE INDEX IF NOT EXISTS idx_reels_profile_id ON reels(profile_id);
 CREATE INDEX IF NOT EXISTS idx_reels_published_at ON reels(published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reels_reel_id ON reels(reel_id);
 
 -- 4. Upload Pipeline Jobs (Tracks Reels -> Google Drive -> YouTube Shorts)
 CREATE TABLE IF NOT EXISTS upload_jobs (
     id TEXT PRIMARY KEY,
-    reel_id TEXT NOT NULL REFERENCES reels(id) ON DELETE CASCADE,
-    profile_id TEXT NOT NULL REFERENCES monitored_profiles(id) ON DELETE CASCADE,
+    reel_id TEXT NOT NULL,
+    profile_id TEXT REFERENCES monitored_profiles(id) ON DELETE SET NULL,
     account_username TEXT NOT NULL,
     caption TEXT,
     thumbnail_url TEXT,
@@ -88,6 +89,8 @@ CREATE TABLE IF NOT EXISTS upload_jobs (
 
 CREATE INDEX IF NOT EXISTS idx_upload_jobs_status ON upload_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_upload_jobs_profile ON upload_jobs(profile_id);
+CREATE INDEX IF NOT EXISTS idx_upload_jobs_shortcode ON upload_jobs(shortcode);
+CREATE INDEX IF NOT EXISTS idx_upload_jobs_reel_id ON upload_jobs(reel_id);
 
 -- 5. Chronological Activity Logs
 CREATE TABLE IF NOT EXISTS activity_logs (
@@ -108,3 +111,41 @@ CREATE TABLE IF NOT EXISTS integrations_config (
     config_data TEXT NOT NULL DEFAULT '{}',
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- 7. Stored Google OAuth Credentials (AES-256-GCM Encrypted at Rest)
+CREATE TABLE IF NOT EXISTS google_credentials (
+    id TEXT PRIMARY KEY DEFAULT 'default',
+    encrypted_access_token TEXT NOT NULL,
+    encrypted_refresh_token TEXT,
+    expires_at INTEGER NOT NULL,
+    email TEXT NOT NULL,
+    channel_id TEXT,
+    channel_title TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 8. Ephemeral OAuth States (CSRF State Token Validation & Replay Defense)
+CREATE TABLE IF NOT EXISTS oauth_states (
+    state TEXT PRIMARY KEY,
+    provider TEXT NOT NULL DEFAULT 'google',
+    redirect_uri TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON oauth_states(expires_at);
+
+-- Initial default records for serverless cold-start
+INSERT OR IGNORE INTO automation_settings (
+    id, is_enabled, polling_interval_minutes, max_uploads_per_day,
+    default_visibility, drive_folder_id, drive_folder_name
+) VALUES (
+    'default', 1, 30, 5, 'public', 'root', 'Instagram Reels Backup'
+);
+
+INSERT OR IGNORE INTO integrations_config (service_name, is_connected, config_data)
+VALUES
+    ('google_drive', 0, '{"connected":false,"email":"Not connected","target_folder":"Instagram Reels Backup"}'),
+    ('youtube', 0, '{"connected":false,"channel_title":"Not connected","channel_id":"None"}'),
+    ('meta', 0, '{"connected":false,"app_id":"None (Public URL Mode)","has_secret":false}');

@@ -144,13 +144,17 @@ export class PipelineService {
         result.reelsDetected += discovery.new_reels.length;
 
         for (const reel of discovery.new_reels) {
-          // Deduplication
-          if (ReelDeduplicationStore.hasBeenSeen(reel.reel_id)) {
+          // Durable Deduplication across database and cache
+          const alreadySeen =
+            (await Repository.isReelRecorded(reel.reel_id)) ||
+            ReelDeduplicationStore.hasBeenSeen(reel.reel_id);
+          if (alreadySeen) {
             result.details.push(`Skipping already-seen Reel: ${reel.reel_id}`);
             continue;
           }
 
-          // Register in deduplication store
+          // Register in durable deduplication store
+          await Repository.recordReel(reel.reel_id, profile.id, reel.permalink);
           ReelDeduplicationStore.recordReel(reel.reel_id, profile.id);
 
           // Create upload job record

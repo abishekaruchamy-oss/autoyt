@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getGoogleAuthUrl } from '@/server/services/googleAuthService';
+import { Repository } from '@/server/db/repository';
 
 export async function GET(request: NextRequest) {
   const redirectUri = `${request.nextUrl.origin}/api/auth/google/callback`;
 
   try {
     const { url, state } = getGoogleAuthUrl(redirectUri);
+
+    // Persist OAuth CSRF state in durable repository (D1 / DataStore)
+    await Repository.saveOAuthState(state, redirectUri);
 
     const response = NextResponse.redirect(url);
     response.cookies.set('google_oauth_state', state, {

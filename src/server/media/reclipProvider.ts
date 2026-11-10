@@ -203,7 +203,7 @@ export class ReClipYtDlpProvider implements IMediaProvider {
         'yt-dlp',
         args,
         { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 },
-        (err, stdout, stderr) => {
+        (err: any, stdout: any, stderr: any) => {
           if (!err && stdout) {
             try {
               return resolve(parseYtDlpJson(stdout));
@@ -217,7 +217,7 @@ export class ReClipYtDlpProvider implements IMediaProvider {
             'python',
             ['-m', 'yt_dlp', ...args],
             { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 },
-            (pyErr, pyStdout, pyStderr) => {
+            (pyErr: any, pyStdout: any, pyStderr: any) => {
               if (pyErr) {
                 const finalErr = pyStderr || stderr || pyErr.message;
                 return reject(new Error(finalErr.trim().split('\n').pop() || finalErr));

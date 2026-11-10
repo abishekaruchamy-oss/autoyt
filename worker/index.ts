@@ -6,6 +6,7 @@
 // @ts-ignore: .open-next/worker.js is generated dynamically by opennextjs-cloudflare build
 import openNextHandler from '../.open-next/worker.js';
 import { PipelineService } from '../src/server/services/pipelineService';
+import { Repository } from '../src/server/db/repository';
 
 export interface CloudflareEnv {
   DB?: any; // Cloudflare D1 Database binding
@@ -35,6 +36,11 @@ export default {
    * Serves Next.js 16 App Router (SSR, client components, API route handlers, and static assets)
    */
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext): Promise<Response> {
+    // Connect D1 database binding to Repository
+    if (env.DB) {
+      Repository.setD1Database(env.DB);
+    }
+
     // Populate process.env with Cloudflare Worker secrets and environment variables
     if (env.GOOGLE_CLIENT_ID) process.env.GOOGLE_CLIENT_ID = env.GOOGLE_CLIENT_ID;
     if (env.GOOGLE_CLIENT_SECRET) process.env.GOOGLE_CLIENT_SECRET = env.GOOGLE_CLIENT_SECRET;
@@ -50,6 +56,10 @@ export default {
    * Automatically executes every 30 minutes via Cloudflare Cron
    */
   async scheduled(event: ScheduledEvent, env: CloudflareEnv, ctx: ExecutionContext): Promise<void> {
+    // Connect D1 database binding for background execution
+    if (env.DB) {
+      Repository.setD1Database(env.DB);
+    }
     if (env.GOOGLE_CLIENT_ID) process.env.GOOGLE_CLIENT_ID = env.GOOGLE_CLIENT_ID;
     if (env.GOOGLE_CLIENT_SECRET) process.env.GOOGLE_CLIENT_SECRET = env.GOOGLE_CLIENT_SECRET;
     if (env.TOKEN_ENCRYPTION_KEY) process.env.TOKEN_ENCRYPTION_KEY = env.TOKEN_ENCRYPTION_KEY;
