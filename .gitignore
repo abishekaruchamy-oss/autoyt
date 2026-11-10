@@ -41,5 +41,26 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# media fixtures
+# media fixtures & downloads
 tests/fixtures/*.mp4
+*.mp4
+*.m4v
+*.mkv
+*.webm
+*.mov
+*.avi
+*.mp3
+*.m4a
+*.wav
+downloads/
+
+# databases, secrets & wrangler state
+*.db
+*.sqlite
+*.sqlite3
+*.d1
+.wrangler/
+cookies.txt
+*.cookies
+*.key
+
