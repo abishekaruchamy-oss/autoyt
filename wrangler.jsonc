@@ -24,7 +24,8 @@
     {
       "binding": "DB",
       "database_name": "autoshorts-db",
-      "database_id": "9a677418-27cc-46dd-bb6a-e988f8170975"
+      "database_id": "9a677418-27cc-46dd-bb6a-e988f8170975",
+      "migrations_dir": "db/migrations"
     }
   ]
 }
