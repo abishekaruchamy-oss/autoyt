@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAdminApi } from '@/lib/auth';
+import { NO_STORE_HEADERS, sanitizeErrorMessage, sanitizeUploadJobForApi } from '@/lib/security';
 import { PipelineService } from '@/server/services/pipelineService';
 import { ReelSubmissionPayload } from '@/types';
 import { extractReelShortcode } from '@/server/media/MediaResolver';
 
 export async function POST(request: NextRequest) {
+  const authError = requireAdminApi(request);
+  if (authError) return authError;
+
   try {
     const body = (await request.json()) as ReelSubmissionPayload;
 
@@ -21,7 +26,7 @@ export async function POST(request: NextRequest) {
     if (!reelUrl || typeof reelUrl !== 'string') {
       return NextResponse.json(
         { success: false, error: 'Instagram Reel URL is required.' },
-        { status: 400 }
+        { status: 400, headers: NO_STORE_HEADERS }
       );
     }
 
@@ -34,7 +39,7 @@ export async function POST(request: NextRequest) {
             extraction.error ||
             'Invalid Instagram Reel URL. Format must be e.g. https://www.instagram.com/reel/C3b4XyzABC1/',
         },
-        { status: 400 }
+        { status: 400, headers: NO_STORE_HEADERS }
       );
     }
 
@@ -46,7 +51,7 @@ export async function POST(request: NextRequest) {
           error:
             'Compliance requirement: You must confirm video ownership or authorized creator republishing rights before processing.',
         },
-        { status: 400 }
+        { status: 400, headers: NO_STORE_HEADERS }
       );
     }
 
@@ -63,16 +68,18 @@ export async function POST(request: NextRequest) {
       sandbox: Boolean(sandbox),
     });
 
-    return NextResponse.json({
-      success: true,
-      message: `Reel #${extraction.shortcode} submitted successfully. Current state: ${job.status}`,
-      job,
-    });
-  } catch (error) {
-    const message = (error as Error).message || 'Failed to process Reel submission';
     return NextResponse.json(
-      { success: false, error: message },
-      { status: 500 }
+      {
+        success: true,
+        message: `Reel #${extraction.shortcode} submitted successfully. Current state: ${job.status}`,
+        job: sanitizeUploadJobForApi(job),
+      },
+      { headers: NO_STORE_HEADERS }
+    );
+  } catch (error) {
+    return NextResponse.json(
+      { success: false, error: sanitizeErrorMessage(error, 'Failed to process Reel submission.') },
+      { status: 500, headers: NO_STORE_HEADERS }
     );
   }
 }

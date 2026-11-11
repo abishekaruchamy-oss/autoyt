@@ -9,6 +9,7 @@ import {
   Lock,
 } from 'lucide-react';
 import { Instagram } from '@/components/ui/Icons';
+import { authFetch } from '@/lib/clientAuthFetch';
 
 interface AddAccountModalProps {
   isOpen: boolean;
@@ -45,7 +46,7 @@ export function AddAccountModal({ isOpen, onClose, onSuccess }: AddAccountModalP
   const handleCreateDemo = async (username: string, name: string, profilePic?: string) => {
     try {
       setLoading(true);
-      const res = await fetch('/api/accounts', {
+      const res = await authFetch('/api/accounts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

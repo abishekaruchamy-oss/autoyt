@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { encryptToken, decryptToken } from '@/lib/crypto';
+import { sanitizeErrorMessage } from '@/lib/security';
 import { Repository } from '../db/repository';
 
 export interface GoogleTokens {
@@ -9,6 +10,12 @@ export interface GoogleTokens {
   token_type: string;
   scope: string;
   obtained_at: number;
+}
+
+export interface RefreshedGoogleTokens {
+  accessToken: string;
+  expiresIn: number;
+  refreshToken?: string;
 }
 
 export interface GoogleAccountDetails {
@@ -94,7 +101,12 @@ export async function exchangeCodeForTokens(
     error_description?: string;
   };
   if (!res.ok || data.error) {
-    throw new Error(data.error_description || data.error || 'Failed to exchange Google OAuth code.');
+    throw new Error(
+      sanitizeErrorMessage(
+        data.error_description || data.error,
+        'Failed to exchange Google OAuth code.'
+      )
+    );
   }
 
   return {
@@ -108,9 +120,12 @@ export async function exchangeCodeForTokens(
 }
 
 /**
- * Refreshes an expired access token using the stored encrypted refresh token
+ * Refreshes an expired access token using the stored encrypted refresh token,
+ * returning Google's `expires_in` lifetime and any rotated `refresh_token`.
  */
-export async function refreshAccessToken(refreshTokenEncrypted: string): Promise<string> {
+export async function refreshGoogleTokens(
+  refreshTokenEncrypted: string
+): Promise<RefreshedGoogleTokens> {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
 
@@ -135,15 +150,42 @@ export async function refreshAccessToken(refreshTokenEncrypted: string): Promise
   });
 
   const data = (await res.json()) as {
-    access_token: string;
+    access_token?: string;
+    expires_in?: number;
+    refresh_token?: string;
     error?: string;
     error_description?: string;
   };
-  if (!res.ok || data.error) {
-    throw new Error(data.error_description || data.error || 'Failed to refresh Google access token.');
+  if (!res.ok || data.error || !data.access_token) {
+    throw new Error(
+      sanitizeErrorMessage(
+        data.error_description || data.error,
+        'Failed to refresh Google access token.'
+      )
+    );
   }
 
-  return data.access_token;
+  const expiresIn =
+    typeof data.expires_in === 'number' && Number.isFinite(data.expires_in) && data.expires_in > 0
+      ? data.expires_in
+      : 3600;
+
+  return {
+    accessToken: data.access_token,
+    expiresIn,
+    refreshToken:
+      typeof data.refresh_token === 'string' && data.refresh_token.length > 0
+        ? data.refresh_token
+        : undefined,
+  };
+}
+
+/**
+ * Backward-compatible wrapper returning only the refreshed access token string.
+ */
+export async function refreshAccessToken(refreshTokenEncrypted: string): Promise<string> {
+  const refreshed = await refreshGoogleTokens(refreshTokenEncrypted);
+  return refreshed.accessToken;
 }
 
 /**
@@ -154,13 +196,16 @@ export async function fetchGoogleAccountDetails(accessToken: string): Promise<Go
   const userRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
+  if (!userRes.ok) {
+    throw new Error('Failed to fetch Google user profile. Reauthorization may be required.');
+  }
   const userData = (await userRes.json()) as {
     email?: string;
     name?: string;
     picture?: string;
   };
 
-  let details: GoogleAccountDetails = {
+  const details: GoogleAccountDetails = {
     email: userData.email || 'unknown@gmail.com',
     name: userData.name || 'Google User',
     picture: userData.picture,
@@ -198,7 +243,7 @@ export async function fetchGoogleAccountDetails(accessToken: string): Promise<Go
       };
     }
   } catch (err) {
-    console.warn('Could not retrieve YouTube channel info:', (err as Error).message);
+    console.warn('Could not retrieve YouTube channel info:', sanitizeErrorMessage(err));
   }
 
   return details;
@@ -210,9 +255,12 @@ export async function fetchGoogleAccountDetails(accessToken: string): Promise<Go
 export async function saveGoogleCredentials(tokens: GoogleTokens): Promise<GoogleAccountDetails> {
   const details = await fetchGoogleAccountDetails(tokens.access_token);
 
-  // Encrypt sensitive tokens at rest
+  // Encrypt sensitive tokens at rest; preserve existing encrypted refresh token if omitted on re-consent
   const encryptedAccess = encryptToken(tokens.access_token);
-  const encryptedRefresh = tokens.refresh_token ? encryptToken(tokens.refresh_token) : undefined;
+  const existing = tokens.refresh_token ? null : await Repository.getGoogleCredentials();
+  const encryptedRefresh = tokens.refresh_token
+    ? encryptToken(tokens.refresh_token)
+    : existing?.encryptedRefreshToken;
   const expiresAt = Date.now() + (tokens.expires_in || 3600) * 1000;
 
   // Persist encrypted credentials in Repository
@@ -247,23 +295,43 @@ export async function saveGoogleCredentials(tokens: GoogleTokens): Promise<Googl
 export async function getValidAccessToken(): Promise<string> {
   const creds = await Repository.getGoogleCredentials();
   if (creds) {
-    const isExpiring = Date.now() > creds.expiresAt - 5 * 60 * 1000; // 5 min buffer
+    const EXPIRY_BUFFER_MS = 5 * 60 * 1000;
+    const isExpiring = Date.now() > creds.expiresAt - EXPIRY_BUFFER_MS;
     if (!isExpiring) {
       return decryptToken(creds.encryptedAccessToken);
     }
 
-    // Refresh token if available
     if (creds.encryptedRefreshToken) {
       try {
-        const freshToken = await refreshAccessToken(creds.encryptedRefreshToken);
-        creds.encryptedAccessToken = encryptToken(freshToken);
-        creds.expiresAt = Date.now() + 3500 * 1000;
-        await Repository.saveGoogleCredentials(creds);
-        return freshToken;
+        const refreshed = await refreshGoogleTokens(creds.encryptedRefreshToken);
+        const encryptedRefreshToken = refreshed.refreshToken
+          ? encryptToken(refreshed.refreshToken)
+          : creds.encryptedRefreshToken;
+
+        await Repository.saveGoogleCredentials({
+          ...creds,
+          encryptedAccessToken: encryptToken(refreshed.accessToken),
+          encryptedRefreshToken,
+          expiresAt: Date.now() + refreshed.expiresIn * 1000,
+          updatedAt: new Date().toISOString(),
+        });
+
+        return refreshed.accessToken;
       } catch (err) {
-        console.warn('Failed to refresh stored Google token:', (err as Error).message);
+        const safeMessage = sanitizeErrorMessage(err, 'Google token refresh failed.');
+        console.warn('Failed to refresh stored Google token:', safeMessage);
+        throw new Error(
+          `Google OAuth reauthorization required: ${safeMessage} Please reconnect your Google account in Settings > Integrations.`
+        );
       }
     }
+
+    if (Date.now() >= creds.expiresAt) {
+      throw new Error(
+        'Google OAuth reauthorization required: Stored access token expired and no refresh token is available. Please reconnect your Google account in Settings > Integrations.'
+      );
+    }
+
     return decryptToken(creds.encryptedAccessToken);
   }
 
@@ -275,6 +343,26 @@ export async function getValidAccessToken(): Promise<string> {
   throw new Error('Google account is not connected. Please authorize via Settings > Integrations.');
 }
 
+async function revokeGoogleTokenBestEffort(rawToken: string): Promise<void> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4000);
+  try {
+    const res = await fetch('https://oauth2.googleapis.com/revoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token: rawToken }).toString(),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      console.warn(`Google OAuth token revocation returned HTTP ${res.status}`);
+    }
+  } catch (err) {
+    console.warn('Google OAuth token revocation request failed:', sanitizeErrorMessage(err));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Checks if a Google account is currently connected
  */
@@ -284,12 +372,32 @@ export async function isGoogleConnected(): Promise<boolean> {
 }
 
 /**
- * Disconnects the Google integration
+ * Disconnects the Google integration, best-effort revoking upstream Google OAuth
+ * credentials and always clearing encrypted credentials from durable storage.
  */
 export async function disconnectGoogle(): Promise<void> {
-  await Repository.clearGoogleCredentials();
-  await Repository.logActivity(
-    'SETTINGS_UPDATED',
-    'Google account disconnected from Google Drive and YouTube Shorts'
-  );
+  const creds = await Repository.getGoogleCredentials();
+
+  try {
+    const encryptedCandidate = creds?.encryptedRefreshToken || creds?.encryptedAccessToken;
+    if (encryptedCandidate) {
+      try {
+        const rawToken = decryptToken(encryptedCandidate);
+        if (rawToken) {
+          await revokeGoogleTokenBestEffort(rawToken);
+        }
+      } catch (err) {
+        console.warn(
+          'Skipping upstream Google token revocation (could not decrypt stored token):',
+          sanitizeErrorMessage(err)
+        );
+      }
+    }
+  } finally {
+    await Repository.clearGoogleCredentials();
+    await Repository.logActivity(
+      'SETTINGS_UPDATED',
+      'Google account disconnected from Google Drive and YouTube Shorts'
+    );
+  }
 }

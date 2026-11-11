@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { X, RotateCcw, ShieldCheck, Check } from 'lucide-react';
 import { Instagram } from '@/components/ui/Icons';
+import { authFetch } from '@/lib/clientAuthFetch';
 import { InstagramAccount } from '@/types';
 
 interface ReconnectModalProps {
@@ -21,7 +22,7 @@ export function ReconnectModal({ account, isOpen, onClose, onSuccess }: Reconnec
   const handleReconnect = async () => {
     try {
       setLoading(true);
-      const res = await fetch(`/api/accounts/${account.id}/reconnect`, {
+      const res = await authFetch(`/api/accounts/${account.id}/reconnect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

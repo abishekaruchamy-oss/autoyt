@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { X, Plus, ShieldCheck, Link2, Sparkles, Check } from 'lucide-react';
 import { Instagram } from '@/components/ui/Icons';
+import { authFetch } from '@/lib/clientAuthFetch';
 
 interface AddProfileModalProps {
   isOpen: boolean;
@@ -38,7 +39,7 @@ export function AddProfileModal({ isOpen, onClose, onSuccess }: AddProfileModalP
       setLoading(true);
       setError(null);
 
-      const res = await fetch('/api/profiles', {
+      const res = await authFetch('/api/profiles', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

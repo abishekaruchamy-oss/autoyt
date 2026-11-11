@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { UploadJob, InstagramAccount } from '@/types';
 import { UploadHistoryTable } from '@/components/uploads/UploadHistoryTable';
+import { authFetch } from '@/lib/clientAuthFetch';
 import { History, RefreshCw, CheckCircle2, AlertTriangle, Clock } from 'lucide-react';
 
 export default function UploadsPage() {
@@ -13,8 +14,8 @@ export default function UploadsPage() {
   const fetchData = useCallback(async () => {
     try {
       const [jobsRes, accRes] = await Promise.all([
-        fetch('/api/uploads'),
-        fetch('/api/accounts'),
+        authFetch('/api/uploads'),
+        authFetch('/api/accounts'),
       ]);
 
       const jobsData = (await jobsRes.json()) as { success: boolean; jobs?: UploadJob[] };

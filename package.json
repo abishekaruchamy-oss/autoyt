@@ -30,7 +30,8 @@
     "test:dedup": "tsx tests/atomic-deduplication.test.ts",
     "test:recovery": "tsx tests/safe-retry-and-recovery.test.ts",
     "test:build-guard": "tsx tests/production-build-guard.test.ts",
-    "test:all": "tsx tests/test-suite.ts && tsx tests/production-readiness-audit.ts && tsx tests/phase3-submission-engine.ts && tsx tests/d1-repository.test.ts && tsx tests/encryption-security.test.ts && tsx tests/atomic-deduplication.test.ts && tsx tests/safe-retry-and-recovery.test.ts && tsx tests/production-build-guard.test.ts",
+    "test:security": "tsx tests/phase9-1-security-hardening.test.ts",
+    "test:all": "tsx tests/test-suite.ts && tsx tests/production-readiness-audit.ts && tsx tests/phase3-submission-engine.ts && tsx tests/d1-repository.test.ts && tsx tests/encryption-security.test.ts && tsx tests/atomic-deduplication.test.ts && tsx tests/safe-retry-and-recovery.test.ts && tsx tests/production-build-guard.test.ts && tsx tests/phase9-1-security-hardening.test.ts",
     "clean": "node scripts/clean.js"
   },
   "dependencies": {

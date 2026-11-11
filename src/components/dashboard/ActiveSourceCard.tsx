@@ -12,6 +12,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { Instagram } from '@/components/ui/Icons';
+import { authFetch } from '@/lib/clientAuthFetch';
 import { InstagramAccount } from '@/types';
 import { formatRelativeTime } from '@/lib/utils';
 
@@ -33,7 +34,7 @@ export function ActiveSourceCard({
     try {
       setSwitching(true);
       setShowSwitchMenu(false);
-      const res = await fetch(`/api/accounts/${id}/activate`, { method: 'POST' });
+      const res = await authFetch(`/api/accounts/${id}/activate`, { method: 'POST' });
       const data = (await res.json()) as { success: boolean; error?: string };
       if (data.success) {
         onAccountSwitched();

@@ -1,8 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAdminApi } from '@/lib/auth';
+import {
+  NO_STORE_HEADERS,
+  sanitizeErrorMessage,
+  sanitizeUploadJobForApi,
+  sanitizeUploadJobsForApi,
+} from '@/lib/security';
 import { Repository } from '@/server/db/repository';
 import { JobStatus } from '@/types';
 
 export async function GET(request: NextRequest) {
+  const authError = requireAdminApi(request);
+  if (authError) return authError;
+
   try {
     const { searchParams } = new URL(request.url);
     const shortcode = searchParams.get('shortcode') || undefined;
@@ -11,11 +21,14 @@ export async function GET(request: NextRequest) {
 
     if (shortcode) {
       const job = await Repository.getUploadJobByShortcode(shortcode);
-      return NextResponse.json({
-        success: true,
-        count: job ? 1 : 0,
-        jobs: job ? [job] : [],
-      });
+      return NextResponse.json(
+        {
+          success: true,
+          count: job ? 1 : 0,
+          jobs: job ? [sanitizeUploadJobForApi(job)] : [],
+        },
+        { headers: NO_STORE_HEADERS }
+      );
     }
 
     const jobs = await Repository.getUploadJobs({
@@ -23,15 +36,18 @@ export async function GET(request: NextRequest) {
       search,
     });
 
-    return NextResponse.json({
-      success: true,
-      count: jobs.length,
-      jobs,
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        count: jobs.length,
+        jobs: sanitizeUploadJobsForApi(jobs),
+      },
+      { headers: NO_STORE_HEADERS }
+    );
   } catch (error) {
     return NextResponse.json(
-      { success: false, error: (error as Error).message },
-      { status: 500 }
+      { success: false, error: sanitizeErrorMessage(error, 'Failed to fetch reels.') },
+      { status: 500, headers: NO_STORE_HEADERS }
     );
   }
 }

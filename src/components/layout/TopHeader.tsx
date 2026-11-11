@@ -10,6 +10,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { Instagram } from '@/components/ui/Icons';
+import { authFetch } from '@/lib/clientAuthFetch';
 import { InstagramAccount, AutomationSettings } from '@/types';
 
 interface TopHeaderProps {
@@ -26,7 +27,7 @@ export function TopHeader({ activeAccount, automation, onRefresh }: TopHeaderPro
     try {
       setIsSyncing(true);
       setSyncMessage(null);
-      const res = await fetch('/api/automation/sync-now', { method: 'POST' });
+      const res = await authFetch('/api/automation/sync-now', { method: 'POST' });
       const data = (await res.json()) as { success: boolean; error?: string };
       if (data.success) {
         setSyncMessage('Sync finished!');
@@ -44,7 +45,12 @@ export function TopHeader({ activeAccount, automation, onRefresh }: TopHeaderPro
 
   const handleResetDemo = async () => {
     if (confirm('Reset all demo accounts, uploads, and logs back to the initial sample data?')) {
-      await fetch('/api/demo/reset', { method: 'POST' });
+      const res = await authFetch('/api/demo/reset', { method: 'POST' });
+      if (!res.ok) {
+        const data = (await res.json()) as { error?: string };
+        alert(data.error || 'Demo reset is unavailable.');
+        return;
+      }
       if (onRefresh) onRefresh();
       window.location.reload();
     }

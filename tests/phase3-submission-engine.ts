@@ -18,6 +18,7 @@ import { Repository } from '../src/server/db/repository';
 import { PipelineService } from '../src/server/services/pipelineService';
 import { ReelSubmissionPayload } from '../src/types';
 import { encryptToken } from '../src/lib/crypto';
+import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME, createSessionToken } from '../src/lib/auth';
 import cloudflareWorker from '../src/server/worker';
 
 async function runPhase3Tests() {
@@ -295,10 +296,19 @@ async function runPhase3Tests() {
     passThroughOnException: () => {},
   };
 
-  // 6a. Submit via Worker Request
+  process.env.ADMIN_ACCESS_KEY = process.env.ADMIN_ACCESS_KEY || 'test-operator-access-key-91';
+  process.env.ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || 'test-session-signing-secret-91';
+  const { token: sessionToken, payload: sessionPayload } = createSessionToken();
+  const authCookieHeader = `${SESSION_COOKIE_NAME}=${encodeURIComponent(sessionToken)}; ${CSRF_COOKIE_NAME}=${encodeURIComponent(sessionPayload.csrf)}`;
+
+  // 6a. Submit via Worker Request (authenticated + CSRF)
   const workerReq = new Request('http://localhost:8787/api/reels/submit', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: authCookieHeader,
+      'X-CSRF-Token': sessionPayload.csrf,
+    },
     body: JSON.stringify({
       reelUrl: 'https://www.instagram.com/reel/WorkerTestShort1/',
       confirmedRights: true,
@@ -313,9 +323,12 @@ async function runPhase3Tests() {
   assert.strictEqual(workerData.job.shortcode, 'WorkerTestShort1');
   console.log('✓ Worker /api/reels/submit route processed successfully.');
 
-  // 6b. Query via Worker Request
+  // 6b. Query via Worker Request (authenticated)
   const queryReq = new Request('http://localhost:8787/api/reels?shortcode=WorkerTestShort1', {
     method: 'GET',
+    headers: {
+      Cookie: authCookieHeader,
+    },
   });
   const queryRes = await cloudflareWorker.fetch(queryReq, {}, dummyCtx);
   assert.strictEqual(queryRes.status, 200);

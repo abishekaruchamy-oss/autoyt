@@ -3,8 +3,6 @@
 import React, { useState } from 'react';
 import {
   HardDrive,
-  UploadCloud,
-  Cpu,
   CheckCircle2,
   AlertCircle,
   ExternalLink,
@@ -15,16 +13,19 @@ import {
   LogOut,
   Play,
   Cloud,
-  Check,
 } from 'lucide-react';
 import { Instagram } from '@/components/ui/Icons';
-import { IntegrationStatus, AutomationSettings } from '@/types';
+import { authFetch } from '@/lib/clientAuthFetch';
+import type { OAuthBannerFeedback } from '@/lib/oauthFeedback';
+import { IntegrationStatus, AutomationSettings, PublishingVisibility } from '@/types';
 import Link from 'next/link';
 
 interface IntegrationsPanelProps {
   integrations: IntegrationStatus;
   automation: AutomationSettings;
   accountsCount: number;
+  oauthBanner?: OAuthBannerFeedback | null;
+  onDismissOAuthBanner?: () => void;
   onUpdate: () => void;
 }
 
@@ -32,6 +33,8 @@ export function IntegrationsPanel({
   integrations,
   automation,
   accountsCount,
+  oauthBanner,
+  onDismissOAuthBanner,
   onUpdate,
 }: IntegrationsPanelProps) {
   const [driveFolder, setDriveFolder] = useState(automation.drive_folder_name);
@@ -51,7 +54,7 @@ export function IntegrationsPanel({
     try {
       setSaving(true);
       setSaved(false);
-      const res = await fetch('/api/settings', {
+      const res = await authFetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -66,6 +69,8 @@ export function IntegrationsPanel({
         setSaved(true);
         setTimeout(() => setSaved(false), 2500);
         onUpdate();
+      } else {
+        alert(data.error || 'Error saving settings');
       }
     } catch {
       alert('Error saving settings');
@@ -74,14 +79,10 @@ export function IntegrationsPanel({
     }
   };
 
-  const handleConnectGoogle = () => {
-    window.location.href = '/api/auth/google/authorize';
-  };
-
   const handleDisconnectGoogle = async () => {
     if (confirm('Disconnect your Google account? Uploads to Google Drive and YouTube Shorts will be paused.')) {
       try {
-        const res = await fetch('/api/auth/google/disconnect', { method: 'POST' });
+        const res = await authFetch('/api/auth/google/disconnect', { method: 'POST' });
         const data = (await res.json()) as { success: boolean; error?: string };
         if (data.success) {
           onUpdate();
@@ -98,7 +99,7 @@ export function IntegrationsPanel({
     try {
       setSyncing(true);
       setSyncMessage(null);
-      const res = await fetch('/api/automation/sync-now', {
+      const res = await authFetch('/api/automation/sync-now', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sandbox: false }),
@@ -119,13 +120,56 @@ export function IntegrationsPanel({
 
   const handleResetDemo = async () => {
     if (confirm('Reset all demo state to original sample records?')) {
-      await fetch('/api/demo/reset', { method: 'POST' });
+      const res = await authFetch('/api/demo/reset', { method: 'POST' });
+      const data = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Demo reset is unavailable.');
+        return;
+      }
       window.location.reload();
     }
   };
 
   return (
     <div className="space-y-6">
+      {oauthBanner && (
+        <div
+          role="status"
+          className={`p-4 rounded-2xl border flex items-start justify-between gap-4 text-xs ${
+            oauthBanner.variant === 'success'
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
+              : oauthBanner.variant === 'warning'
+              ? 'bg-amber-500/10 border-amber-500/30 text-amber-200'
+              : 'bg-rose-500/10 border-rose-500/30 text-rose-200'
+          }`}
+        >
+          <div className="flex items-start gap-2.5">
+            {oauthBanner.variant === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+            ) : (
+              <AlertCircle
+                className={`w-4 h-4 shrink-0 mt-0.5 ${
+                  oauthBanner.variant === 'warning' ? 'text-amber-400' : 'text-rose-400'
+                }`}
+              />
+            )}
+            <div>
+              <p className="font-bold">{oauthBanner.title}</p>
+              <p className="mt-0.5 opacity-90">{oauthBanner.message}</p>
+            </div>
+          </div>
+          {onDismissOAuthBanner && (
+            <button
+              type="button"
+              onClick={onDismissOAuthBanner}
+              className="text-zinc-400 hover:text-zinc-200 shrink-0"
+            >
+              Dismiss
+            </button>
+          )}
+        </div>
+      )}
+
       {syncMessage && (
         <div className="p-4 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-between text-xs">
           <div className="flex items-center gap-2 text-zinc-200">
@@ -197,7 +241,7 @@ export function IntegrationsPanel({
                 <label className="text-zinc-400 block mb-1.5 font-medium">Default YouTube Visibility:</label>
                 <select
                   value={youtubeVisibility}
-                  onChange={(e) => setYoutubeVisibility(e.target.value as any)}
+                  onChange={(e) => setYoutubeVisibility(e.target.value as PublishingVisibility)}
                   className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-rose-500"
                 >
                   <option value="public">Public (Immediate Live Shorts)</option>
@@ -219,14 +263,13 @@ export function IntegrationsPanel({
                 <span>Disconnect Google Account</span>
               </button>
             ) : (
-              <button
-                type="button"
-                onClick={handleConnectGoogle}
+              <a
+                href="/api/auth/google/authorize"
                 className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center gap-2 transition-all shadow-md shadow-blue-600/30"
               >
                 <LogIn className="w-4 h-4" />
                 <span>Connect with Google (Drive + YouTube)</span>
-              </button>
+              </a>
             )}
           </div>
         </div>

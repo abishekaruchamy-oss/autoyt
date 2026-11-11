@@ -12,6 +12,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { AutomationSettings } from '@/types';
+import { authFetch } from '@/lib/clientAuthFetch';
 import { formatRelativeTime } from '@/lib/utils';
 
 interface QuickControlsProps {
@@ -26,7 +27,7 @@ export function QuickControls({ automation, onUpdate }: QuickControlsProps) {
   const handleToggle = async () => {
     try {
       setToggling(true);
-      const res = await fetch('/api/automation', {
+      const res = await authFetch('/api/automation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ is_enabled: !automation.is_enabled }),
@@ -45,7 +46,7 @@ export function QuickControls({ automation, onUpdate }: QuickControlsProps) {
   const handleSyncNow = async () => {
     try {
       setSyncing(true);
-      const res = await fetch('/api/automation/sync-now', { method: 'POST' });
+      const res = await authFetch('/api/automation/sync-now', { method: 'POST' });
       const data = (await res.json()) as { success: boolean; error?: string };
       if (data.success) {
         onUpdate();

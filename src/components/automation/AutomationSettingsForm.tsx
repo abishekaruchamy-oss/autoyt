@@ -16,6 +16,7 @@ import {
 import { Instagram } from '@/components/ui/Icons';
 import { AutomationSettings, InstagramAccount, PublishingVisibility } from '@/types';
 import { formatRelativeTime } from '@/lib/utils';
+import { authFetch } from '@/lib/clientAuthFetch';
 
 interface AutomationSettingsFormProps {
   automation: AutomationSettings;
@@ -55,10 +56,10 @@ export function AutomationSettingsForm({
 
       // If active account changed, call activate endpoint
       if (activeAccountId && activeAccountId !== automation.active_account_id) {
-        await fetch(`/api/accounts/${activeAccountId}/activate`, { method: 'POST' });
+        await authFetch(`/api/accounts/${activeAccountId}/activate`, { method: 'POST' });
       }
 
-      const res = await fetch('/api/automation', {
+      const res = await authFetch('/api/automation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -88,7 +89,7 @@ export function AutomationSettingsForm({
   const handleSyncNow = async () => {
     try {
       setSyncing(true);
-      const res = await fetch('/api/automation/sync-now', { method: 'POST' });
+      const res = await authFetch('/api/automation/sync-now', { method: 'POST' });
       const data = (await res.json()) as { success: boolean; message?: string; error?: string };
       if (data.success) {
         alert(data.message || 'Sync completed');

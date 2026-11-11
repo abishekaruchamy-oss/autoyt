@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { constantTimeEqual, requireAdminApi } from '@/lib/auth';
+import { NO_STORE_HEADERS, sanitizeErrorMessage } from '@/lib/security';
 import { Repository } from '@/server/db/repository';
 
 export async function GET(request: NextRequest) {
+  const authError = requireAdminApi(request, { requireCsrf: false });
+  if (authError) return authError;
+
   const { searchParams } = new URL(request.url);
   const code = searchParams.get('code');
   const state = searchParams.get('state');
@@ -10,30 +15,34 @@ export async function GET(request: NextRequest) {
 
   const cookieState = request.cookies.get('ig_oauth_state')?.value;
 
+  const redirectWithClearedState = (target: string) => {
+    const response = NextResponse.redirect(new URL(target, request.url), {
+      headers: NO_STORE_HEADERS,
+    });
+    response.cookies.set('ig_oauth_state', '', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 0,
+      path: '/api/auth/instagram',
+    });
+    return response;
+  };
+
   if (error) {
-    return NextResponse.redirect(
-      new URL(
-        `/accounts?error=${encodeURIComponent(errorDescription || error)}`,
-        request.url
-      )
+    return redirectWithClearedState(
+      `/accounts?error=${encodeURIComponent(sanitizeErrorMessage(errorDescription || error, 'oauth_error'))}`
     );
   }
 
   if (!code) {
-    return NextResponse.redirect(
-      new URL('/accounts?error=missing_code', request.url)
-    );
+    return redirectWithClearedState('/accounts?error=missing_code');
   }
 
-  // Validate CSRF state
-  if (!cookieState || cookieState !== state) {
+  // Strictly enforce CSRF state in every environment
+  if (!state || !cookieState || !constantTimeEqual(cookieState, state)) {
     console.warn('OAuth state mismatch during Instagram callback');
-    // In production we enforce state match; in local development we tolerate if cookie was lost
-    if (process.env.NODE_ENV === 'production') {
-      return NextResponse.redirect(
-        new URL('/accounts?error=invalid_csrf_state', request.url)
-      );
-    }
+    return redirectWithClearedState('/accounts?error=invalid_csrf_state');
   }
 
   const clientId = process.env.META_CLIENT_ID;
@@ -107,18 +116,10 @@ export async function GET(request: NextRequest) {
       expires_in_seconds: expiresInSeconds,
     });
 
-    const response = NextResponse.redirect(
-      new URL('/accounts?success=connected', request.url)
-    );
-    response.cookies.delete('ig_oauth_state');
-    return response;
+    return redirectWithClearedState('/accounts?success=connected');
   } catch (err) {
-    console.error('Error during Instagram OAuth callback:', err);
-    return NextResponse.redirect(
-      new URL(
-        `/accounts?error=${encodeURIComponent((err as Error).message)}`,
-        request.url
-      )
-    );
+    const safeError = sanitizeErrorMessage(err, 'Instagram OAuth callback failed.');
+    console.error('Error during Instagram OAuth callback:', safeError);
+    return redirectWithClearedState(`/accounts?error=${encodeURIComponent(safeError)}`);
   }
 }

@@ -7,6 +7,7 @@ import { MetricsGrid } from '@/components/dashboard/MetricsGrid';
 import { ActiveSourceCard } from '@/components/dashboard/ActiveSourceCard';
 import { QuickControls } from '@/components/dashboard/QuickControls';
 import { RecentActivityFeed } from '@/components/dashboard/RecentActivityFeed';
+import { authFetch } from '@/lib/clientAuthFetch';
 import { RefreshCw, PlayCircle } from 'lucide-react';
 
 export default function DashboardPage() {
@@ -17,8 +18,8 @@ export default function DashboardPage() {
   const fetchData = useCallback(async () => {
     try {
       const [dashRes, accRes] = await Promise.all([
-        fetch('/api/dashboard'),
-        fetch('/api/accounts'),
+        authFetch('/api/dashboard'),
+        authFetch('/api/accounts'),
       ]);
 
       const dashData = (await dashRes.json()) as { success: boolean; metrics?: DashboardMetrics };

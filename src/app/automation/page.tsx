@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { AutomationSettings, InstagramAccount } from '@/types';
 import { AutomationSettingsForm } from '@/components/automation/AutomationSettingsForm';
 import { WorkflowEndpointsCard } from '@/components/automation/WorkflowEndpointsCard';
+import { authFetch } from '@/lib/clientAuthFetch';
 import { Cpu, RefreshCw } from 'lucide-react';
 
 export default function AutomationPage() {
@@ -14,8 +15,8 @@ export default function AutomationPage() {
   const fetchData = useCallback(async () => {
     try {
       const [autoRes, accRes] = await Promise.all([
-        fetch('/api/automation'),
-        fetch('/api/accounts'),
+        authFetch('/api/automation'),
+        authFetch('/api/accounts'),
       ]);
 
       const autoData = (await autoRes.json()) as { success: boolean; automation?: AutomationSettings };

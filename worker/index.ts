@@ -12,11 +12,40 @@ export interface CloudflareEnv {
   DB?: any; // Cloudflare D1 Database binding
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
+  GOOGLE_REDIRECT_URI?: string;
   TOKEN_ENCRYPTION_KEY?: string;
+  ADMIN_ACCESS_KEY?: string;
+  ADMIN_SESSION_SECRET?: string;
+  N8N_WEBHOOK_SECRET?: string;
   NEXT_PUBLIC_APP_URL?: string;
   STORAGE_DEFAULT_FOLDER?: string;
   POLLING_INTERVAL_MINUTES?: string;
   WORKER_SELF_REFERENCE?: any;
+}
+
+const FORWARDED_ENV_KEYS = [
+  'GOOGLE_CLIENT_ID',
+  'GOOGLE_CLIENT_SECRET',
+  'GOOGLE_REDIRECT_URI',
+  'TOKEN_ENCRYPTION_KEY',
+  'ADMIN_ACCESS_KEY',
+  'ADMIN_SESSION_SECRET',
+  'N8N_WEBHOOK_SECRET',
+  'NEXT_PUBLIC_APP_URL',
+  'STORAGE_DEFAULT_FOLDER',
+  'POLLING_INTERVAL_MINUTES',
+] as const;
+
+function applyWorkerEnv(env: CloudflareEnv): void {
+  if (env.DB) {
+    Repository.setD1Database(env.DB);
+  }
+  for (const key of FORWARDED_ENV_KEYS) {
+    const val = env[key];
+    if (typeof val === 'string' && val.length > 0) {
+      process.env[key] = val;
+    }
+  }
 }
 
 export interface ScheduledEvent {
@@ -36,18 +65,7 @@ export default {
    * Serves Next.js 16 App Router (SSR, client components, API route handlers, and static assets)
    */
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext): Promise<Response> {
-    // Connect D1 database binding to Repository
-    if (env.DB) {
-      Repository.setD1Database(env.DB);
-    }
-
-    // Populate process.env with Cloudflare Worker secrets and environment variables
-    if (env.GOOGLE_CLIENT_ID) process.env.GOOGLE_CLIENT_ID = env.GOOGLE_CLIENT_ID;
-    if (env.GOOGLE_CLIENT_SECRET) process.env.GOOGLE_CLIENT_SECRET = env.GOOGLE_CLIENT_SECRET;
-    if (env.TOKEN_ENCRYPTION_KEY) process.env.TOKEN_ENCRYPTION_KEY = env.TOKEN_ENCRYPTION_KEY;
-    if (env.NEXT_PUBLIC_APP_URL) process.env.NEXT_PUBLIC_APP_URL = env.NEXT_PUBLIC_APP_URL;
-    if (env.POLLING_INTERVAL_MINUTES) process.env.POLLING_INTERVAL_MINUTES = env.POLLING_INTERVAL_MINUTES;
-
+    applyWorkerEnv(env);
     return (openNextHandler as any).fetch(request, env, ctx);
   },
 
@@ -56,14 +74,7 @@ export default {
    * Automatically executes every 30 minutes via Cloudflare Cron
    */
   async scheduled(event: ScheduledEvent, env: CloudflareEnv, ctx: ExecutionContext): Promise<void> {
-    // Connect D1 database binding for background execution
-    if (env.DB) {
-      Repository.setD1Database(env.DB);
-    }
-    if (env.GOOGLE_CLIENT_ID) process.env.GOOGLE_CLIENT_ID = env.GOOGLE_CLIENT_ID;
-    if (env.GOOGLE_CLIENT_SECRET) process.env.GOOGLE_CLIENT_SECRET = env.GOOGLE_CLIENT_SECRET;
-    if (env.TOKEN_ENCRYPTION_KEY) process.env.TOKEN_ENCRYPTION_KEY = env.TOKEN_ENCRYPTION_KEY;
-    if (env.NEXT_PUBLIC_APP_URL) process.env.NEXT_PUBLIC_APP_URL = env.NEXT_PUBLIC_APP_URL;
+    applyWorkerEnv(env);
 
     ctx.waitUntil(
       (async () => {

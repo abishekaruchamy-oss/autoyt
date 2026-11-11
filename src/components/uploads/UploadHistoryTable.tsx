@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { Instagram } from '@/components/ui/Icons';
 import { getJobStatusBadge, formatRelativeTime } from '@/lib/utils';
+import { authFetch } from '@/lib/clientAuthFetch';
 
 interface UploadHistoryTableProps {
   jobs: UploadJob[];
@@ -56,7 +57,7 @@ export function UploadHistoryTable({
   const handleRetry = async (jobId: string) => {
     try {
       setRetryingId(jobId);
-      const res = await fetch(`/api/uploads/${jobId}/retry`, { method: 'POST' });
+      const res = await authFetch(`/api/uploads/${jobId}/retry`, { method: 'POST' });
       const data = (await res.json()) as { success: boolean; error?: string };
       if (data.success) {
         onJobRetried();

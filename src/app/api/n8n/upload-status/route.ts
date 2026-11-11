@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireWebhookOrAdminApi } from '@/lib/auth';
+import { NO_STORE_HEADERS, sanitizeErrorMessage, sanitizeUploadJobForApi } from '@/lib/security';
 import { Repository } from '@/server/db/repository';
 import { JobStatus } from '@/types';
 
@@ -19,6 +21,9 @@ interface UploadStatusPayload {
 }
 
 export async function POST(request: NextRequest) {
+  const authError = requireWebhookOrAdminApi(request);
+  if (authError) return authError;
+
   try {
     const body = (await request.json()) as UploadStatusPayload;
     const {
@@ -85,16 +90,19 @@ export async function POST(request: NextRequest) {
     } else if (status === 'FAILED') {
       await Repository.logActivity(
         'UPLOAD_FAILED',
-        `Upload pipeline failed: ${error_details || 'Unknown error'}`,
+        `Upload pipeline failed: ${sanitizeErrorMessage(error_details, 'Unknown error')}`,
         account_username
       );
     }
 
-    return NextResponse.json({ success: true, job: targetJob });
+    return NextResponse.json(
+      { success: true, job: sanitizeUploadJobForApi(targetJob) },
+      { headers: NO_STORE_HEADERS }
+    );
   } catch (error) {
     return NextResponse.json(
-      { success: false, error: (error as Error).message },
-      { status: 500 }
+      { success: false, error: sanitizeErrorMessage(error, 'Failed to update upload status.') },
+      { status: 500, headers: NO_STORE_HEADERS }
     );
   }
 }

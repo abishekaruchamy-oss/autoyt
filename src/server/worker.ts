@@ -4,6 +4,21 @@
  * and Cloudflare Cron triggers (scheduled polling).
  */
 
+import {
+  appendClearOAuthStateCookie,
+  appendOAuthStateCookie,
+  authorizeAdminRequest,
+  OAUTH_STATE_COOKIE_NAME,
+  parseCookiesFromRequest,
+  signOAuthStateCookieValue,
+  verifyOAuthStateCookieValue,
+} from '../lib/auth';
+import {
+  NO_STORE_HEADERS,
+  sanitizeErrorMessage,
+  sanitizeUploadJobForApi,
+  sanitizeUploadJobsForApi,
+} from '../lib/security';
 import { Repository } from './db/repository';
 import { PipelineService } from './services/pipelineService';
 import { getGoogleAuthUrl, exchangeCodeForTokens, saveGoogleCredentials, disconnectGoogle, isGoogleConnected } from './services/googleAuthService';
@@ -12,7 +27,11 @@ export interface CloudflareEnv {
   DB?: any; // Cloudflare D1 Database binding
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
+  GOOGLE_REDIRECT_URI?: string;
   TOKEN_ENCRYPTION_KEY?: string;
+  ADMIN_ACCESS_KEY?: string;
+  ADMIN_SESSION_SECRET?: string;
+  N8N_WEBHOOK_SECRET?: string;
   NEXT_PUBLIC_APP_URL?: string;
   STORAGE_DEFAULT_FOLDER?: string;
   POLLING_INTERVAL_MINUTES?: string;
@@ -54,7 +73,11 @@ export default {
     // Populate environment variables into process.env if running in worker
     if (env.GOOGLE_CLIENT_ID) process.env.GOOGLE_CLIENT_ID = env.GOOGLE_CLIENT_ID;
     if (env.GOOGLE_CLIENT_SECRET) process.env.GOOGLE_CLIENT_SECRET = env.GOOGLE_CLIENT_SECRET;
+    if (env.GOOGLE_REDIRECT_URI) process.env.GOOGLE_REDIRECT_URI = env.GOOGLE_REDIRECT_URI;
     if (env.TOKEN_ENCRYPTION_KEY) process.env.TOKEN_ENCRYPTION_KEY = env.TOKEN_ENCRYPTION_KEY;
+    if (env.ADMIN_ACCESS_KEY) process.env.ADMIN_ACCESS_KEY = env.ADMIN_ACCESS_KEY;
+    if (env.ADMIN_SESSION_SECRET) process.env.ADMIN_SESSION_SECRET = env.ADMIN_SESSION_SECRET;
+    if (env.N8N_WEBHOOK_SECRET) process.env.N8N_WEBHOOK_SECRET = env.N8N_WEBHOOK_SECRET;
     if (env.NEXT_PUBLIC_APP_URL) process.env.NEXT_PUBLIC_APP_URL = env.NEXT_PUBLIC_APP_URL;
 
     const url = new URL(request.url);
@@ -63,13 +86,11 @@ export default {
 
     const jsonHeaders = {
       'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      ...NO_STORE_HEADERS,
     };
 
     if (method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: jsonHeaders });
+      return new Response(null, { status: 204, headers: NO_STORE_HEADERS });
     }
 
     try {
@@ -111,19 +132,34 @@ export default {
         );
       }
 
+      const requireWorkerAdmin = (requireCsrf?: boolean): Response | null => {
+        const auth = authorizeAdminRequest(request, { requireCsrf });
+        if (auth.ok) return null;
+        return new Response(JSON.stringify({ success: false, error: auth.error }), {
+          status: auth.status,
+          headers: jsonHeaders,
+        });
+      };
+
       // 2. Dashboard Metrics
       if (path === '/api/dashboard' && method === 'GET') {
+        const authFailure = requireWorkerAdmin();
+        if (authFailure) return authFailure;
         const metrics = await Repository.getDashboardMetrics();
         return new Response(JSON.stringify(metrics), { status: 200, headers: jsonHeaders });
       }
 
       // 3. Profiles API
       if (path === '/api/profiles' && method === 'GET') {
+        const authFailure = requireWorkerAdmin();
+        if (authFailure) return authFailure;
         const profiles = await Repository.getMonitoredProfiles();
         return new Response(JSON.stringify({ success: true, profiles }), { status: 200, headers: jsonHeaders });
       }
 
       if (path === '/api/profiles' && method === 'POST') {
+        const authFailure = requireWorkerAdmin();
+        if (authFailure) return authFailure;
         const body = await request.json() as { profile_url: string; display_name?: string };
         const newProf = await Repository.addMonitoredProfile(body.profile_url, body.display_name);
         return new Response(JSON.stringify({ success: true, profile: newProf }), { status: 201, headers: jsonHeaders });
@@ -131,6 +167,8 @@ export default {
 
       // 4. Automation Sync Trigger
       if (path === '/api/automation/sync-now' && method === 'POST') {
+        const authFailure = requireWorkerAdmin();
+        if (authFailure) return authFailure;
         let sandbox = false;
         try {
           const body = (await request.json()) as { sandbox?: boolean };
@@ -152,38 +190,65 @@ export default {
 
       // 5. Google OAuth Endpoints
       if (path === '/api/auth/google/authorize') {
+        const auth = authorizeAdminRequest(request, { requireCsrf: false });
+        if (!auth.ok) {
+          return new Response(JSON.stringify({ success: false, error: auth.error }), {
+            status: auth.status,
+            headers: jsonHeaders,
+          });
+        }
         const redirectUri = process.env.GOOGLE_REDIRECT_URI || `${url.origin}/api/auth/google/callback`;
         const { url: authUrl, state } = getGoogleAuthUrl(redirectUri);
         await Repository.saveOAuthState(state, redirectUri);
-        return Response.redirect(authUrl, 302);
+        const headers = new Headers({ Location: authUrl, ...NO_STORE_HEADERS });
+        appendOAuthStateCookie(headers, signOAuthStateCookieValue(state, auth.session.jti), request);
+        return new Response(null, { status: 302, headers });
       }
 
       if (path === '/api/auth/google/callback') {
+        const clearRedirect = (target: string) => {
+          const headers = new Headers({ Location: target, ...NO_STORE_HEADERS });
+          appendClearOAuthStateCookie(headers, request);
+          return new Response(null, { status: 302, headers });
+        };
+
+        const auth = authorizeAdminRequest(request, { requireCsrf: false });
+        if (!auth.ok) {
+          return clearRedirect(`${url.origin}/settings?error=unauthorized`);
+        }
+
         const code = url.searchParams.get('code');
         const state = url.searchParams.get('state');
         if (!code) {
-          return new Response(JSON.stringify({ error: 'Missing code parameter' }), { status: 400, headers: jsonHeaders });
+          return clearRedirect(`${url.origin}/settings?error=missing_auth_code`);
         }
-        if (!state) {
-          return new Response(JSON.stringify({ error: 'Missing state parameter for CSRF verification' }), { status: 400, headers: jsonHeaders });
+        const cookies = parseCookiesFromRequest(request);
+        if (!verifyOAuthStateCookieValue(cookies[OAUTH_STATE_COOKIE_NAME], state, auth.session.jti)) {
+          return clearRedirect(`${url.origin}/settings?error=invalid_csrf_state`);
         }
-        const isValid = await Repository.validateAndConsumeOAuthState(state);
+        const isValid = state ? await Repository.validateAndConsumeOAuthState(state) : false;
         if (!isValid) {
-          return new Response(JSON.stringify({ error: 'Invalid or expired CSRF OAuth state' }), { status: 403, headers: jsonHeaders });
+          return clearRedirect(`${url.origin}/settings?error=expired_or_invalid_oauth_state`);
         }
         const redirectUri = process.env.GOOGLE_REDIRECT_URI || `${url.origin}/api/auth/google/callback`;
         const tokens = await exchangeCodeForTokens(code, redirectUri);
-        await saveGoogleCredentials(tokens);
-        return Response.redirect(`${url.origin}/settings?google_auth=success`, 302);
+        const details = await saveGoogleCredentials(tokens);
+        return clearRedirect(
+          `${url.origin}/settings?success=google_connected&account=${encodeURIComponent(details.email)}`
+        );
       }
 
       if (path === '/api/auth/google/disconnect' && method === 'POST') {
+        const authFailure = requireWorkerAdmin();
+        if (authFailure) return authFailure;
         await disconnectGoogle();
         return new Response(JSON.stringify({ success: true, message: 'Google disconnected' }), { status: 200, headers: jsonHeaders });
       }
 
       // 6. Settings API
       if (path === '/api/settings') {
+        const authFailure = requireWorkerAdmin();
+        if (authFailure) return authFailure;
         if (method === 'GET') {
           const integrations = await Repository.getIntegrations();
           const automation = await Repository.getAutomationSettings();
@@ -204,8 +269,13 @@ export default {
 
       // 7. Uploads API
       if (path === '/api/uploads' && method === 'GET') {
+        const authFailure = requireWorkerAdmin();
+        if (authFailure) return authFailure;
         const jobs = await Repository.getUploadJobs();
-        return new Response(JSON.stringify({ success: true, jobs }), { status: 200, headers: jsonHeaders });
+        return new Response(
+          JSON.stringify({ success: true, jobs: sanitizeUploadJobsForApi(jobs) }),
+          { status: 200, headers: jsonHeaders }
+        );
       }
 
       // 8. Reel Direct Submission Engine (Phase 3B)
@@ -220,6 +290,9 @@ export default {
             { status: 429, headers: { ...jsonHeaders, 'Retry-After': '60' } }
           );
         }
+
+        const authFailure = requireWorkerAdmin();
+        if (authFailure) return authFailure;
 
         const body = (await request.json()) as any;
         if (!body.reelUrl) {
@@ -251,28 +324,41 @@ export default {
         );
 
         return new Response(
-          JSON.stringify({ success: true, message: `Reel processed. Status: ${job.status}`, job }),
+          JSON.stringify({
+            success: true,
+            message: `Reel processed. Status: ${job.status}`,
+            job: sanitizeUploadJobForApi(job),
+          }),
           { status: 200, headers: jsonHeaders }
         );
       }
 
       if (path === '/api/reels' && method === 'GET') {
+        const authFailure = requireWorkerAdmin();
+        if (authFailure) return authFailure;
         const shortcode = url.searchParams.get('shortcode');
         if (shortcode) {
           const job = await Repository.getUploadJobByShortcode(shortcode);
           return new Response(
-            JSON.stringify({ success: true, count: job ? 1 : 0, jobs: job ? [job] : [] }),
+            JSON.stringify({
+              success: true,
+              count: job ? 1 : 0,
+              jobs: job ? [sanitizeUploadJobForApi(job)] : [],
+            }),
             { status: 200, headers: jsonHeaders }
           );
         }
         const jobs = await Repository.getUploadJobs();
-        return new Response(JSON.stringify({ success: true, count: jobs.length, jobs }), { status: 200, headers: jsonHeaders });
+        return new Response(
+          JSON.stringify({ success: true, count: jobs.length, jobs: sanitizeUploadJobsForApi(jobs) }),
+          { status: 200, headers: jsonHeaders }
+        );
       }
 
       return new Response(JSON.stringify({ error: `Not Found: ${path}` }), { status: 404, headers: jsonHeaders });
     } catch (err) {
       return new Response(
-        JSON.stringify({ success: false, error: (err as Error).message }),
+        JSON.stringify({ success: false, error: sanitizeErrorMessage(err) }),
         { status: 500, headers: jsonHeaders }
       );
     }

@@ -19,6 +19,7 @@ import {
 import { YouTubeIcon } from '@/components/ui/Icons';
 import { UploadJob, PublishingVisibility } from '@/types';
 import { getJobStatusBadge, formatRelativeTime } from '@/lib/utils';
+import { authFetch } from '@/lib/clientAuthFetch';
 
 export default function SubmitReelPage() {
   const [reelUrl, setReelUrl] = useState('');
@@ -48,7 +49,7 @@ export default function SubmitReelPage() {
 
   const fetchJobs = useCallback(async () => {
     try {
-      const res = await fetch('/api/reels');
+      const res = await authFetch('/api/reels');
       const data = (await res.json()) as { success: boolean; jobs?: UploadJob[] };
       if (data.success && data.jobs) {
         setJobs(data.jobs);
@@ -85,7 +86,7 @@ export default function SubmitReelPage() {
 
     setSubmitting(true);
     try {
-      const res = await fetch('/api/reels/submit', {
+      const res = await authFetch('/api/reels/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -132,7 +133,7 @@ export default function SubmitReelPage() {
 
   const handleRetry = async (jobId: string) => {
     try {
-      const res = await fetch(`/api/uploads/${jobId}/retry`, { method: 'POST' });
+      const res = await authFetch(`/api/uploads/${jobId}/retry`, { method: 'POST' });
       const data = (await res.json()) as { success: boolean; error?: string };
       if (data.success) {
         await fetchJobs();
