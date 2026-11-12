@@ -30,6 +30,12 @@ export function Navigation() {
   const pathname = usePathname();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
+  // Hide navigation chrome on /login so unauthenticated <Link> prefetches
+  // do not cache protected-route 307 redirects in the Next.js Router Cache.
+  if (pathname === '/login') {
+    return null;
+  }
+
   return (
     <>
       {/* Desktop Sidebar */}

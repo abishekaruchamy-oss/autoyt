@@ -1,22 +1,16 @@
 'use client';
 
-import React, { Suspense, useEffect, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import React, { Suspense, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { AlertCircle, KeyRound, Lock, ShieldCheck } from 'lucide-react';
-
-function sanitizeNextPath(raw: string | null): string {
-  if (!raw || !raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) {
-    return '/';
-  }
-  return raw;
-}
+import { redirectToPath, sanitizeNextPath, submitOperatorLogin } from '@/lib/clientAuthFetch';
 
 function LoginFormContent() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const safeNext = sanitizeNextPath(searchParams.get('next'));
   const queryError = searchParams.get('error');
 
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const [accessKey, setAccessKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [checking, setChecking] = useState(true);
@@ -35,7 +29,7 @@ function LoginFormContent() {
         if (!active) return;
         setConfigured(Boolean(data.configured));
         if (data.authenticated) {
-          router.replace(safeNext);
+          redirectToPath(safeNext);
           return;
         }
         setChecking(false);
@@ -47,11 +41,12 @@ function LoginFormContent() {
     return () => {
       active = false;
     };
-  }, [router, safeNext]);
+  }, [safeNext]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!accessKey.trim()) {
+    const candidateKey = accessKey || inputRef.current?.value || '';
+    if (!candidateKey.trim()) {
       setErrorMessage('Enter the operator access key.');
       return;
     }
@@ -59,24 +54,17 @@ function LoginFormContent() {
     try {
       setSubmitting(true);
       setErrorMessage(null);
-      const res = await fetch('/api/auth/session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({ accessKey }),
+      const result = await submitOperatorLogin({
+        accessKey: candidateKey,
+        nextPath: safeNext,
       });
 
-      const data = (await res.json()) as { success?: boolean; error?: string };
-      if (!res.ok || !data.success) {
-        setErrorMessage(data.error || 'Authentication failed.');
+      if (!result.ok) {
+        setErrorMessage(result.error);
         return;
       }
 
       setAccessKey('');
-      router.replace(safeNext);
-      router.refresh();
-    } catch {
-      setErrorMessage('Unable to verify credentials. Please try again.');
     } finally {
       setSubmitting(false);
     }
@@ -123,6 +111,7 @@ function LoginFormContent() {
             <div className="relative">
               <KeyRound className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
+                ref={inputRef}
                 id="operator-access-key"
                 type="password"
                 value={accessKey}

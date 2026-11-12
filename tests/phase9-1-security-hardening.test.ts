@@ -21,6 +21,7 @@ import {
   createSessionToken,
 } from '../src/lib/auth';
 import { encryptToken, decryptToken } from '../src/lib/crypto';
+import { sanitizeNextPath, submitOperatorLogin } from '../src/lib/clientAuthFetch';
 import { resolveOAuthBannerFeedback } from '../src/lib/oauthFeedback';
 import { sanitizeErrorMessage } from '../src/lib/security';
 import { proxy } from '../src/proxy';
@@ -675,8 +676,158 @@ async function runPhase91SecurityTests() {
     assert.ok(!sanitizedErr.includes('=abc'));
 
     console.log('✓ Google revocation on disconnect and zero credential leakage verified.');
+
+    // ---------------------------------------------------------------
+    // 7. Phase 9.5 Login Flow, Expiry, Cookie Attributes, & Frontend Regression
+    // ---------------------------------------------------------------
+    console.log('[7/7] Verifying Phase 9.5 login flow, session expiry, and frontend navigation handling...');
+
+    // Missing / empty operator access key -> 401
+    for (const emptyPayload of [{ accessKey: '' }, { accessKey: '   ' }, {}]) {
+      const missingRes = await sessionRoute.POST(
+        makeRequest('/api/auth/session', {
+          method: 'POST',
+          headers: { origin: TEST_ORIGIN },
+          body: emptyPayload,
+        })
+      );
+      assert.strictEqual(missingRes.status, 401, 'Empty or missing accessKey must return 401');
+    }
+
+    // Missing ADMIN_SESSION_SECRET alone (even with ADMIN_ACCESS_KEY set) -> fail closed 503
+    const tempSessionSecret = process.env.ADMIN_SESSION_SECRET;
+    delete process.env.ADMIN_SESSION_SECRET;
+    const missingSecretRes = await sessionRoute.POST(
+      makeRequest('/api/auth/session', {
+        method: 'POST',
+        headers: { origin: TEST_ORIGIN },
+        body: { accessKey: 'phase91-operator-secret-key' },
+      })
+    );
+    assert.strictEqual(missingSecretRes.status, 503);
+    process.env.ADMIN_SESSION_SECRET = tempSessionSecret;
+
+    // Fresh HTTPS production login -> HttpOnly, Secure, SameSite=Lax, Path=/ cookies + GET /api/auth/session true
+    (process.env as Record<string, string | undefined>).NODE_ENV = 'production';
+    const freshLoginRes = await sessionRoute.POST(
+      makeRequest('/api/auth/session', {
+        method: 'POST',
+        headers: { origin: TEST_ORIGIN, 'x-forwarded-proto': 'https' },
+        body: { accessKey: 'phase91-operator-secret-key' },
+      })
+    );
+    assert.strictEqual(freshLoginRes.status, 200);
+    const setCookieHeaders = getSetCookieHeaders(freshLoginRes);
+    const sessionHeaderLine = setCookieHeaders.find((line) => line.startsWith(`${SESSION_COOKIE_NAME}=`));
+    const csrfHeaderLine = setCookieHeaders.find((line) => line.startsWith(`${CSRF_COOKIE_NAME}=`));
+    assert.ok(sessionHeaderLine?.includes('HttpOnly'), 'Session cookie must include HttpOnly');
+    assert.ok(sessionHeaderLine?.includes('Secure'), 'Production HTTPS session cookie must include Secure');
+    assert.ok(sessionHeaderLine?.includes('SameSite=Lax'), 'Session cookie must include SameSite=Lax');
+    assert.ok(sessionHeaderLine?.includes('Path=/'), 'Session cookie must include Path=/');
+    assert.ok(csrfHeaderLine && !csrfHeaderLine.includes('HttpOnly'), 'CSRF cookie must be readable by browser');
+    (process.env as Record<string, string | undefined>).NODE_ENV = 'test';
+
+    const freshCookies = makeCookieMapFromSetCookie(setCookieHeaders);
+    const freshCookieHeader = `${SESSION_COOKIE_NAME}=${encodeURIComponent(freshCookies[SESSION_COOKIE_NAME])}; ${CSRF_COOKIE_NAME}=${encodeURIComponent(freshCookies[CSRF_COOKIE_NAME])}`;
+
+    const activeSessionRes = await sessionRoute.GET(
+      makeRequest('/api/auth/session', { headers: { cookie: freshCookieHeader } })
+    );
+    assert.strictEqual(activeSessionRes.status, 200);
+    assert.deepStrictEqual(await activeSessionRes.json(), { authenticated: true, configured: true });
+
+    // Expired session -> rejected by API & proxy
+    const { token: expiredToken } = createSessionToken(-10);
+    const expiredCookieHeader = `${SESSION_COOKIE_NAME}=${encodeURIComponent(expiredToken)}`;
+    const expiredDashRes = await dashboardRoute.GET(
+      makeRequest('/api/dashboard', { headers: { cookie: expiredCookieHeader } })
+    );
+    assert.strictEqual(expiredDashRes.status, 401);
+    const expiredProxyRes = proxy(makeRequest('/', { headers: { cookie: expiredCookieHeader } }));
+    assert.strictEqual(expiredProxyRes.status, 307);
+    assert.ok(expiredProxyRes.headers.get('cache-control')?.includes('no-store'));
+
+    // Authenticated dashboard GET -> 200; valid CSRF mutation POST /api/settings -> 200
+    const authDashRes = await dashboardRoute.GET(
+      makeRequest('/api/dashboard', { headers: { cookie: freshCookieHeader } })
+    );
+    assert.strictEqual(authDashRes.status, 200);
+    const validMutationRes = await settingsRoute.POST(
+      makeRequest('/api/settings', {
+        method: 'POST',
+        headers: {
+          cookie: freshCookieHeader,
+          origin: TEST_ORIGIN,
+          'x-csrf-token': freshCookies[CSRF_COOKIE_NAME],
+        },
+        body: { automation: { default_visibility: 'private' } },
+      })
+    );
+    assert.strictEqual(validMutationRes.status, 200);
+
+    // Frontend submitOperatorLogin: server error, non-JSON 502 error, network failure, and full navigation
+    let navigatedTo: string | null = null;
+    const errLogin = await submitOperatorLogin({
+      accessKey: 'wrong-key',
+      nextPath: '/automation',
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ success: false, error: 'Invalid access key.' }), {
+          status: 401,
+          headers: { 'content-type': 'application/json' },
+        }),
+      navigate: (t) => {
+        navigatedTo = t;
+      },
+    });
+    assert.deepStrictEqual(errLogin, { ok: false, status: 401, error: 'Invalid access key.' });
+    assert.strictEqual(navigatedTo, null);
+
+    const serverErrLogin = await submitOperatorLogin({
+      accessKey: 'valid-key',
+      fetchImpl: async () => new Response('Bad Gateway', { status: 502 }),
+      navigate: (t) => {
+        navigatedTo = t;
+      },
+    });
+    assert.strictEqual(serverErrLogin.ok, false);
+    assert.strictEqual(serverErrLogin.status, 502);
+    assert.strictEqual(navigatedTo, null);
+
+    const networkErrLogin = await submitOperatorLogin({
+      accessKey: 'valid-key',
+      fetchImpl: async () => {
+        throw new Error('Network unreachable');
+      },
+      navigate: (t) => {
+        navigatedTo = t;
+      },
+    });
+    assert.deepStrictEqual(networkErrLogin, {
+      ok: false,
+      error: 'Unable to verify credentials. Please try again.',
+    });
+    assert.strictEqual(navigatedTo, null);
+
+    const okLogin = await submitOperatorLogin({
+      accessKey: 'phase91-operator-secret-key',
+      nextPath: '/automation?tab=runs',
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ success: true, authenticated: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      navigate: (t) => {
+        navigatedTo = t;
+      },
+    });
+    assert.deepStrictEqual(okLogin, { ok: true, nextPath: '/automation?tab=runs' });
+    assert.strictEqual(navigatedTo, '/automation?tab=runs');
+    assert.strictEqual(sanitizeNextPath('//attacker.example'), '/');
+    assert.strictEqual(sanitizeNextPath('/\\attacker'), '/');
+
+    console.log('✓ Phase 9.5 login, session expiry, cookie attributes, and frontend navigation verified.');
     console.log('\n================================================================');
-    console.log('ALL PHASE 9.1 SECURITY HARDENING TESTS PASSED (6/6)');
+    console.log('ALL PHASE 9.1 & 9.5 SECURITY HARDENING TESTS PASSED (7/7)');
     console.log('================================================================');
   } finally {
     globalThis.fetch = originalFetch;

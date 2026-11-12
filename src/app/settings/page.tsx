@@ -4,7 +4,7 @@ import React, { Suspense, useEffect, useState, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { IntegrationStatus, AutomationSettings } from '@/types';
 import { IntegrationsPanel } from '@/components/settings/IntegrationsPanel';
-import { authFetch } from '@/lib/clientAuthFetch';
+import { authFetch, redirectToPath } from '@/lib/clientAuthFetch';
 import { resolveOAuthBannerFeedback } from '@/lib/oauthFeedback';
 import { Settings, RefreshCw, LogOut, AlertCircle } from 'lucide-react';
 
@@ -99,8 +99,7 @@ function SettingsContent() {
 
   const handleSignOut = async () => {
     await authFetch('/api/auth/session', { method: 'DELETE' });
-    router.replace('/login');
-    router.refresh();
+    redirectToPath('/login');
   };
 
   if (loading) {

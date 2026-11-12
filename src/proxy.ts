@@ -39,7 +39,9 @@ export function proxy(request: NextRequest) {
     if (nextPath && nextPath !== '/') {
       loginUrl.searchParams.set('next', nextPath);
     }
-    return applySecurityHeaders(NextResponse.redirect(loginUrl));
+    const redirectResponse = NextResponse.redirect(loginUrl);
+    redirectResponse.headers.set('Cache-Control', 'no-store, private');
+    return applySecurityHeaders(redirectResponse);
   }
 
   return applySecurityHeaders(NextResponse.next());
