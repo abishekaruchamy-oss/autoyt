@@ -1,9 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
-import { X, Plus, ShieldCheck, Link2, Sparkles, Check } from 'lucide-react';
-import { Instagram } from '@/components/ui/Icons';
-import { authFetch } from '@/lib/clientAuthFetch';
+import { X, Plus, ShieldCheck, Link2 } from 'lucide-react';
+import { fetchJsonWithTimeout } from '@/lib/apiClient';
 
 interface AddProfileModalProps {
   isOpen: boolean;
@@ -39,26 +38,27 @@ export function AddProfileModal({ isOpen, onClose, onSuccess }: AddProfileModalP
       setLoading(true);
       setError(null);
 
-      const res = await authFetch('/api/profiles', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          profile_url: targetUrl,
-          display_name: name || undefined,
-        }),
-      });
+      const res = await fetchJsonWithTimeout<{ success: boolean; error?: string }>(
+        '/api/profiles',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            profile_url: targetUrl,
+            display_name: name || undefined,
+          }),
+        },
+        15000
+      );
 
-      const data = (await res.json()) as { success: boolean; error?: string };
-      if (data.success) {
+      if (res.ok && res.data?.success) {
         setUrlInput('');
         setDisplayName('');
         onSuccess();
         onClose();
       } else {
-        setError(data.error || 'Failed to add profile URL');
+        setError(res.error || res.data?.error || 'Failed to add profile URL.');
       }
-    } catch {
-      setError('Network error while adding profile');
     } finally {
       setLoading(false);
     }
@@ -81,9 +81,9 @@ export function AddProfileModal({ isOpen, onClose, onSuccess }: AddProfileModalP
             <Link2 className="w-6 h-6" />
           </div>
           <div>
-            <h3 className="text-xl font-bold text-white tracking-tight">Add Public Instagram Profile</h3>
+            <h3 className="text-xl font-bold text-white tracking-tight">Register Public Instagram Profile</h3>
             <p className="text-xs text-zinc-400 mt-0.5">
-              Paste any public Instagram profile URL to monitor for YouTube Shorts republishing.
+              Registers a public profile URL and checks HTTP reachability. Authorized media is still required for video ingestion.
             </p>
           </div>
         </div>
@@ -155,7 +155,7 @@ export function AddProfileModal({ isOpen, onClose, onSuccess }: AddProfileModalP
 
         {/* Presets */}
         <div className="pt-2 border-t border-zinc-800">
-          <span className="text-xs font-semibold text-zinc-400 block mb-2">Or select a quick test profile:</span>
+          <span className="text-xs font-semibold text-zinc-400 block mb-2">Or select a sample public profile URL:</span>
           <div className="grid grid-cols-1 gap-2">
             {PRESET_URLS.map((p) => (
               <button

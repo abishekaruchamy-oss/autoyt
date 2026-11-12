@@ -2,13 +2,9 @@
 
 import React, { useState } from 'react';
 import {
-  Code,
   Copy,
   Check,
-  ExternalLink,
   Cpu,
-  Layers,
-  ArrowRight,
 } from 'lucide-react';
 
 export function WorkflowEndpointsCard() {
@@ -27,7 +23,7 @@ export function WorkflowEndpointsCard() {
       name: '1. Fetch Active Instagram Account',
       method: 'GET',
       path: '/api/n8n/active-account',
-      desc: 'n8n queries this first. Retrieves active account ID, username, and decrypted OAuth token dynamically from PostgreSQL.',
+      desc: 'Retrieves the active monitored public profile (zero-OAuth URL metadata) from Cloudflare D1 for optional external webhooks.',
     },
     {
       name: '2. Acquire Execution Lock',
@@ -74,7 +70,7 @@ export function WorkflowEndpointsCard() {
           </div>
           <div className="p-3 bg-zinc-900/70 rounded-xl border border-zinc-800">
             <span className="text-[10px] uppercase font-bold text-purple-400 block mb-1">Step 2</span>
-            <span className="font-semibold text-zinc-200">Instagram Graph API</span>
+            <span className="font-semibold text-zinc-200">Public Profile / Creator Media</span>
           </div>
           <div className="p-3 bg-zinc-900/70 rounded-xl border border-zinc-800">
             <span className="text-[10px] uppercase font-bold text-cyan-400 block mb-1">Step 3</span>

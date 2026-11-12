@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
 
     if (result.skipped) {
       return NextResponse.json(
-        { success: false, error: result.reason },
+        { success: false, error: result.reason, result },
         { status: 409, headers: NO_STORE_HEADERS }
       );
     }

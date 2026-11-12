@@ -162,13 +162,29 @@ export interface ActivityLog {
 }
 
 export interface StorageMetrics {
-  used_bytes: number;
-  total_bytes: number;
+  connected: boolean;
+  available: boolean;
+  used_bytes: number | null;
+  total_bytes: number | null;
   used_formatted: string;
   total_formatted: string;
-  percentage: number;
-  reels_stored: number;
+  percentage: number | null;
+  reels_stored: number | null;
   folder_name: string;
+  source?: 'google_drive_api' | 'unavailable';
+  note?: string;
+}
+
+export interface ExecutionReadiness {
+  ready_for_live_upload: boolean;
+  google_drive_connected: boolean;
+  youtube_connected: boolean;
+  google_oauth_tokens_available: boolean;
+  active_profile_configured: boolean;
+  automation_enabled: boolean;
+  daily_uploads_used: number;
+  daily_upload_limit: number;
+  blocking_reasons: string[];
 }
 
 export interface DashboardMetrics {
@@ -180,9 +196,15 @@ export interface DashboardMetrics {
   active_accounts_count: number;
   active_account: InstagramAccount | null;
   total_reels_detected: number;
+  reels_detected_today: number;
   total_videos_uploaded: number;
   failed_uploads: number;
   in_progress_uploads: number;
+  success_rate: number | null;
+  generated_at: string;
+  data_source: 'cloudflare_d1' | 'local_memory';
+  is_production: boolean;
+  readiness: ExecutionReadiness;
   storage: StorageMetrics;
   automation: AutomationSettings;
   recent_activity: ActivityLog[];

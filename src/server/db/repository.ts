@@ -6,6 +6,7 @@ import {
   ActivityLog,
   IntegrationStatus,
   DashboardMetrics,
+  ExecutionReadiness,
   JobStatus,
   ActivityEventType,
 } from '@/types';
@@ -21,7 +22,6 @@ import {
   normalizeProfileUrl,
   StandardPublicWebAdapter,
 } from '../monitoring/adapter';
-import { formatBytes } from '@/lib/utils';
 import crypto from 'node:crypto';
 import { getD1Database, setD1Database, isD1Connected, D1Database } from './d1Client';
 
@@ -710,15 +710,54 @@ export class Repository {
     return store.automation;
   }
 
+  private static validateAutomationUpdates(
+    updates: Partial<AutomationSettings>
+  ): Partial<AutomationSettings> {
+    const validated: Partial<AutomationSettings> = { ...updates };
+
+    if (updates.polling_interval_minutes !== undefined) {
+      const interval = Number(updates.polling_interval_minutes);
+      if (!Number.isInteger(interval) || interval < 1 || interval > 1440) {
+        throw new Error('Polling interval must be a whole number between 1 and 1440 minutes.');
+      }
+      validated.polling_interval_minutes = interval;
+    }
+
+    if (updates.max_uploads_per_day !== undefined) {
+      const cap = Number(updates.max_uploads_per_day);
+      if (!Number.isInteger(cap) || cap < 1 || cap > 100) {
+        throw new Error('Daily upload cap must be a whole number between 1 and 100.');
+      }
+      validated.max_uploads_per_day = cap;
+    }
+
+    if (updates.default_visibility !== undefined) {
+      if (!['private', 'unlisted', 'public'].includes(updates.default_visibility)) {
+        throw new Error('Default YouTube visibility must be private, unlisted, or public.');
+      }
+    }
+
+    if (updates.drive_folder_name !== undefined) {
+      const trimmed = updates.drive_folder_name.trim();
+      if (!trimmed || trimmed.length > 120) {
+        throw new Error('Google Drive target folder name must be between 1 and 120 characters.');
+      }
+      validated.drive_folder_name = trimmed;
+    }
+
+    return validated;
+  }
+
   static async updateAutomationSettings(
     updates: Partial<AutomationSettings>
   ): Promise<AutomationSettings> {
+    const sanitizedUpdates = this.validateAutomationUpdates(updates);
     const d1 = getD1Database();
     if (d1) {
       const current = await this.getAutomationSettings();
       const updated: AutomationSettings = {
         ...current,
-        ...updates,
+        ...sanitizedUpdates,
         updated_at: new Date().toISOString(),
       };
 
@@ -746,7 +785,9 @@ export class Repository {
       return updated;
     }
 
-    Object.assign(store.automation, updates, { updated_at: new Date().toISOString() });
+    Object.assign(store.automation, sanitizedUpdates, {
+      updated_at: new Date().toISOString(),
+    });
     await this.logActivity('SETTINGS_UPDATED', 'Automation configuration updated');
     return store.automation;
   }
@@ -1630,74 +1671,223 @@ export class Repository {
   }
 
   // ==========================================
-  // Dashboard Metrics Aggregations
+  // Execution Readiness & Dashboard Aggregations
   // ==========================================
 
-  static async getDashboardMetrics(): Promise<DashboardMetrics> {
-    const profiles = await this.getMonitoredProfiles();
-    const activeProfile = profiles.find((p) => p.is_active_source) || profiles[0] || null;
-    const automation = await this.getAutomationSettings();
-    const recentActivity = await this.getActivityLogs(8);
+  private static getUtcDayStartIso(): string {
+    return `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
+  }
 
+  static async getTodayCompletedUploadsCount(): Promise<number> {
+    const todayStart = this.getUtcDayStartIso();
     const d1 = getD1Database();
+    if (d1) {
+      const row = await d1
+        .prepare(
+          `SELECT COUNT(*) as cnt FROM upload_jobs WHERE status = 'COMPLETED' AND COALESCE(completed_at, updated_at, created_at) >= ?`
+        )
+        .bind(todayStart)
+        .first<{ cnt: number }>();
+      return Number(row?.cnt || 0);
+    }
+
+    return store.uploadJobs.filter((j) => {
+      if (j.status !== 'COMPLETED') return false;
+      const ts = j.completed_at || j.updated_at || j.created_at;
+      return Boolean(ts && ts >= todayStart);
+    }).length;
+  }
+
+  static async evaluateExecutionReadiness(): Promise<ExecutionReadiness> {
+    const [profiles, activeProfile, automation, integrations, googleCreds, dailyUploadsUsed] =
+      await Promise.all([
+        this.getMonitoredProfiles(),
+        this.getActiveMonitoredProfile(),
+        this.getAutomationSettings(),
+        this.getIntegrations(),
+        this.getGoogleCredentials(),
+        this.getTodayCompletedUploadsCount(),
+      ]);
+
+    const googleTokensAvailable = Boolean(googleCreds || process.env.GOOGLE_ACCESS_TOKEN);
+    const googleDriveConnected = Boolean(
+      integrations.google_drive.connected && googleTokensAvailable
+    );
+    const youtubeConnected = Boolean(
+      integrations.youtube.connected && googleTokensAvailable
+    );
+
+    const activeProfileConfigured = Boolean(
+      activeProfile && activeProfile.status !== 'PAUSED'
+    );
+    const hasRunnableProfiles = profiles.some((p) => p.status !== 'PAUSED');
+
+    const blockingReasons: string[] = [];
+
+    if (!activeProfile) {
+      blockingReasons.push('No monitored Instagram profile is configured.');
+    } else if (!activeProfileConfigured && !hasRunnableProfiles) {
+      blockingReasons.push('All monitored Instagram profiles are paused.');
+    } else if (!activeProfileConfigured) {
+      blockingReasons.push(`Active profile @${activeProfile.username} is paused.`);
+    }
+
+    if (
+      !Number.isInteger(automation.polling_interval_minutes) ||
+      automation.polling_interval_minutes < 1 ||
+      automation.polling_interval_minutes > 1440
+    ) {
+      blockingReasons.push('Polling interval must be configured between 1 and 1440 minutes.');
+    }
+
+    if (
+      !Number.isInteger(automation.max_uploads_per_day) ||
+      automation.max_uploads_per_day < 1
+    ) {
+      blockingReasons.push('Daily YouTube upload cap must be at least 1.');
+    }
+
+    if (!['private', 'unlisted', 'public'].includes(automation.default_visibility)) {
+      blockingReasons.push('Default YouTube visibility configuration is invalid.');
+    }
+
+    if (!automation.drive_folder_name || !automation.drive_folder_name.trim()) {
+      blockingReasons.push('Google Drive target folder name is not configured.');
+    }
+
+    if (!googleDriveConnected) {
+      blockingReasons.push('Google Drive OAuth integration is not connected in Settings.');
+    }
+
+    if (!youtubeConnected) {
+      blockingReasons.push('YouTube channel OAuth integration is not connected in Settings.');
+    }
+
+    if (
+      Number.isInteger(automation.max_uploads_per_day) &&
+      automation.max_uploads_per_day >= 1 &&
+      dailyUploadsUsed >= automation.max_uploads_per_day
+    ) {
+      blockingReasons.push(
+        `Daily upload limit reached (${dailyUploadsUsed}/${automation.max_uploads_per_day} today).`
+      );
+    }
+
+    return {
+      ready_for_live_upload: blockingReasons.length === 0,
+      google_drive_connected: googleDriveConnected,
+      youtube_connected: youtubeConnected,
+      google_oauth_tokens_available: googleTokensAvailable,
+      active_profile_configured: activeProfileConfigured,
+      automation_enabled: automation.is_enabled,
+      daily_uploads_used: dailyUploadsUsed,
+      daily_upload_limit: automation.max_uploads_per_day,
+      blocking_reasons: blockingReasons,
+    };
+  }
+
+  static async getDashboardMetrics(): Promise<DashboardMetrics> {
+    const [profiles, automation, recentActivity, readiness] = await Promise.all([
+      this.getMonitoredProfiles(),
+      this.getAutomationSettings(),
+      this.getActivityLogs(8),
+      this.evaluateExecutionReadiness(),
+    ]);
+
+    const activeProfile = profiles.find((p) => p.is_active_source) || profiles[0] || null;
+    const todayStart = this.getUtcDayStartIso();
+    const d1 = getD1Database();
+
     let totalReelsDetected = 0;
+    let reelsDetectedToday = 0;
     let totalVideosUploaded = 0;
     let failedUploads = 0;
     let inProgressUploads = 0;
+    let archivedDriveCount = 0;
 
     if (d1) {
       const stats = await d1
         .prepare(`
           SELECT
             COUNT(*) as total_jobs,
+            SUM(CASE WHEN COALESCE(detected_at, created_at) >= ? THEN 1 ELSE 0 END) as today_jobs,
             SUM(CASE WHEN status = 'COMPLETED' THEN 1 ELSE 0 END) as completed_jobs,
             SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) as failed_jobs,
-            SUM(CASE WHEN status NOT IN ('COMPLETED', 'FAILED') THEN 1 ELSE 0 END) as in_progress_jobs
+            SUM(CASE WHEN status NOT IN ('COMPLETED', 'FAILED') THEN 1 ELSE 0 END) as in_progress_jobs,
+            SUM(CASE WHEN drive_file_id IS NOT NULL AND TRIM(drive_file_id) != '' THEN 1 ELSE 0 END) as drive_archived_jobs
           FROM upload_jobs
         `)
+        .bind(todayStart)
         .first<any>();
 
-      const totalJobs = Number(stats?.total_jobs || 0);
-      totalReelsDetected = totalJobs;
+      totalReelsDetected = Number(stats?.total_jobs || 0);
+      reelsDetectedToday = Math.min(totalReelsDetected, Number(stats?.today_jobs || 0));
       totalVideosUploaded = Number(stats?.completed_jobs || 0);
       failedUploads = Number(stats?.failed_jobs || 0);
       inProgressUploads = Number(stats?.in_progress_jobs || 0);
+      archivedDriveCount = Number(stats?.drive_archived_jobs || 0);
     } else {
       const jobs = store.uploadJobs;
-      totalReelsDetected = jobs.length + 18;
-      totalVideosUploaded = jobs.filter((j) => j.status === 'COMPLETED').length + 14;
+      totalReelsDetected = jobs.length;
+      reelsDetectedToday = Math.min(
+        totalReelsDetected,
+        jobs.filter((j) => {
+          const ts = j.detected_at || j.created_at;
+          return Boolean(ts && ts >= todayStart);
+        }).length
+      );
+      totalVideosUploaded = jobs.filter((j) => j.status === 'COMPLETED').length;
       failedUploads = jobs.filter((j) => j.status === 'FAILED').length;
       inProgressUploads = jobs.filter(
         (j) => j.status !== 'COMPLETED' && j.status !== 'FAILED'
       ).length;
+      archivedDriveCount = jobs.filter(
+        (j) => typeof j.drive_file_id === 'string' && j.drive_file_id.trim().length > 0
+      ).length;
     }
 
-    const usedBytes = 14.8 * 1024 * 1024 * 1024;
-    const totalBytes = 100 * 1024 * 1024 * 1024;
+    const terminalTotal = totalVideosUploaded + failedUploads;
+    const successRate =
+      terminalTotal > 0 ? Math.round((totalVideosUploaded / terminalTotal) * 100) : null;
 
     const activeLegacyAccount = activeProfile
       ? await this.getAccountById(activeProfile.id)
       : null;
 
+    const activeProfilesCount = profiles.filter((p) => p.status === 'ACTIVE').length;
+    const driveConnected = readiness.google_drive_connected;
+
     return {
       total_profiles: profiles.length,
-      active_profiles_count: profiles.filter((p) => p.status === 'ACTIVE').length,
+      active_profiles_count: activeProfilesCount,
       active_profile: activeProfile,
       total_accounts: profiles.length,
-      active_accounts_count: profiles.filter((p) => p.status === 'ACTIVE').length,
+      active_accounts_count: activeProfilesCount,
       active_account: activeLegacyAccount,
       total_reels_detected: totalReelsDetected,
+      reels_detected_today: reelsDetectedToday,
       total_videos_uploaded: totalVideosUploaded,
       failed_uploads: failedUploads,
       in_progress_uploads: inProgressUploads,
+      success_rate: successRate,
+      generated_at: new Date().toISOString(),
+      data_source: d1 ? 'cloudflare_d1' : 'local_memory',
+      is_production: process.env.NODE_ENV === 'production',
+      readiness,
       storage: {
-        used_bytes: usedBytes,
-        total_bytes: totalBytes,
-        used_formatted: formatBytes(usedBytes),
-        total_formatted: formatBytes(totalBytes),
-        percentage: Math.round((usedBytes / totalBytes) * 100),
-        reels_stored: totalVideosUploaded + 6,
+        connected: driveConnected,
+        available: false,
+        used_bytes: null,
+        total_bytes: null,
+        used_formatted: 'N/A',
+        total_formatted: 'N/A',
+        percentage: null,
+        reels_stored: driveConnected ? archivedDriveCount : null,
         folder_name: automation.drive_folder_name,
+        source: 'unavailable',
+        note: driveConnected
+          ? 'Google Drive quota lookup unavailable.'
+          : 'Google Drive not connected. Connect Google OAuth in Settings.',
       },
       automation,
       recent_activity: recentActivity,

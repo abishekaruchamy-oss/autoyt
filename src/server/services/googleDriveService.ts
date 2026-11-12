@@ -1,5 +1,3 @@
-import { Readable } from 'stream';
-
 export interface DriveUploadResult {
   fileId: string;
   name: string;
@@ -368,5 +366,71 @@ export class GoogleDriveService {
     }
 
     return finalResult;
+  }
+
+  /**
+   * Fetches real Google Drive account storage quota when available from Google Drive API.
+   * Never fabricates usage metrics when quota fields are unavailable or inaccessible.
+   */
+  static async getStorageQuota(accessToken: string): Promise<{
+    available: boolean;
+    usedBytes: number | null;
+    totalBytes: number | null;
+    note?: string;
+  }> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    try {
+      const res = await fetch(
+        'https://www.googleapis.com/drive/v3/about?fields=storageQuota(limit,usage,usageInDrive)',
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          signal: controller.signal,
+        }
+      );
+
+      if (!res.ok) {
+        return {
+          available: false,
+          usedBytes: null,
+          totalBytes: null,
+          note: `Google Drive quota unavailable (HTTP ${res.status}).`,
+        };
+      }
+
+      const data = (await res.json()) as {
+        storageQuota?: { limit?: string; usage?: string; usageInDrive?: string };
+      };
+      const quota = data.storageQuota;
+      const usedRaw = quota?.usage ?? quota?.usageInDrive;
+      const limitRaw = quota?.limit;
+
+      const usedBytes = usedRaw !== undefined ? Number(usedRaw) : NaN;
+      const totalBytes = limitRaw !== undefined ? Number(limitRaw) : NaN;
+
+      if (!Number.isFinite(usedBytes) || !Number.isFinite(totalBytes) || totalBytes <= 0) {
+        return {
+          available: false,
+          usedBytes: null,
+          totalBytes: null,
+          note: 'Google Drive storage quota not returned for current OAuth scope.',
+        };
+      }
+
+      return {
+        available: true,
+        usedBytes,
+        totalBytes,
+      };
+    } catch {
+      return {
+        available: false,
+        usedBytes: null,
+        totalBytes: null,
+        note: 'Google Drive quota lookup timed out or is currently unreachable.',
+      };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }

@@ -12,9 +12,17 @@ import {
 import { GoogleDriveService } from './googleDriveService';
 import { YouTubeService } from './youtubeService';
 import { getValidAccessToken, isGoogleConnected } from './googleAuthService';
-import { MonitoredProfile, UploadJob, DiscoveredReel, ReelSubmissionPayload } from '@/types';
+import {
+  MonitoredProfile,
+  UploadJob,
+  DiscoveredReel,
+  ReelSubmissionPayload,
+  ExecutionReadiness,
+  DashboardMetrics,
+} from '@/types';
 import { extractReelShortcode, MediaResolver } from '../media/MediaResolver';
 import { encryptToken, decryptToken } from '@/lib/crypto';
+import { formatBytes } from '@/lib/utils';
 
 export interface PipelineSyncOptions {
   profileId?: string;
@@ -26,6 +34,7 @@ export interface PipelineSyncResult {
   success: boolean;
   skipped?: boolean;
   reason?: string;
+  readiness?: ExecutionReadiness;
   profilesChecked: number;
   reelsDetected: number;
   jobsProcessed: number;
@@ -60,6 +69,23 @@ export class PipelineService {
         jobsSucceeded: 0,
         jobsFailed: 0,
         details: ['Sync skipped: Automation is disabled.'],
+      };
+    }
+
+    // 1b. Check execution readiness before running live sync/scheduled upload automation
+    const readiness = await Repository.evaluateExecutionReadiness();
+    if (!options?.sandbox && !readiness.ready_for_live_upload) {
+      return {
+        success: false,
+        skipped: true,
+        reason: `Execution readiness check failed: ${readiness.blocking_reasons.join(' ')}`,
+        readiness,
+        profilesChecked: 0,
+        reelsDetected: 0,
+        jobsProcessed: 0,
+        jobsSucceeded: 0,
+        jobsFailed: 0,
+        details: readiness.blocking_reasons,
       };
     }
 
@@ -129,6 +155,7 @@ export class PipelineService {
         : new StandardPublicWebAdapter();
 
       // 4. Process each profile
+      let uploadsThisRun = 0;
       for (const profile of targetProfiles) {
         result.profilesChecked += 1;
         result.details.push(`Checking profile @${profile.username}...`);
@@ -167,10 +194,32 @@ export class PipelineService {
 
           result.jobsProcessed += 1;
 
-          // If video source is available and Google is connected, proceed through streaming upload
+          // If video source is available and Google is connected, enforce daily upload cap before live upload
+          if (
+            reel.video_source_url &&
+            accessToken &&
+            !options?.sandbox &&
+            readiness.daily_uploads_used + uploadsThisRun >= automation.max_uploads_per_day
+          ) {
+            await Repository.updateUploadJob(job.id, {
+              status: 'MEDIA_AVAILABLE',
+              error_details: `Daily upload cap reached (${readiness.daily_uploads_used + uploadsThisRun}/${automation.max_uploads_per_day}). Queued for next quota window.`,
+            });
+            result.details.push(`Job ${job.id} queued: Daily upload limit reached.`);
+            continue;
+          }
+
           if (reel.video_source_url && accessToken) {
             try {
-              await this.executeJobUpload(job.id, reel, profile.username, accessToken, automation.drive_folder_name, automation.default_visibility);
+              await this.executeJobUpload(
+                job.id,
+                reel,
+                profile.username,
+                accessToken,
+                automation.drive_folder_name,
+                automation.default_visibility || 'private'
+              );
+              uploadsThisRun += 1;
               result.jobsSucceeded += 1;
               result.details.push(`Job ${job.id} completed: Drive + YouTube uploaded.`);
             } catch (jobErr) {
@@ -647,7 +696,18 @@ export class PipelineService {
     // 8. Streaming Transfer Pipeline (Zero Local SSD Disk Consumption)
     const automation = await Repository.getAutomationSettings();
     const visibility = payload.visibility || automation.default_visibility || 'private';
-    const folderName = automation.drive_folder_name || 'Instagram Archive';
+    const folderName = automation.drive_folder_name || 'Instagram Reels Backup';
+
+    if (!options?.sandbox) {
+      const todayUploads = await Repository.getTodayCompletedUploadsCount();
+      if (todayUploads >= automation.max_uploads_per_day) {
+        const cappedJob = await Repository.updateUploadJob(job.id, {
+          status: 'MEDIA_AVAILABLE',
+          error_details: `Daily upload limit reached (${todayUploads}/${automation.max_uploads_per_day} today). Media resolved and queued without exceeding daily cap.`,
+        });
+        return cappedJob!;
+      }
+    }
 
     try {
       // Step A: Archive to Google Drive
@@ -741,6 +801,55 @@ export class PipelineService {
       );
 
       return failedJob!;
+    }
+  }
+
+  /**
+   * Loads persisted dashboard metrics and enriches storage quota from live Google Drive API
+   * when Drive is connected. Never fabricates quota numbers when unavailable.
+   */
+  static async getEnrichedDashboardMetrics(): Promise<DashboardMetrics> {
+    const metrics = await Repository.getDashboardMetrics();
+
+    if (!metrics.storage.connected || process.env.NODE_ENV === 'test') {
+      return metrics;
+    }
+
+    try {
+      const accessToken = await getValidAccessToken();
+      const quota = await GoogleDriveService.getStorageQuota(accessToken);
+      if (quota.available && quota.usedBytes !== null && quota.totalBytes !== null && quota.totalBytes > 0) {
+        return {
+          ...metrics,
+          storage: {
+            ...metrics.storage,
+            available: true,
+            used_bytes: quota.usedBytes,
+            total_bytes: quota.totalBytes,
+            used_formatted: formatBytes(quota.usedBytes),
+            total_formatted: formatBytes(quota.totalBytes),
+            percentage: Math.min(100, Math.round((quota.usedBytes / quota.totalBytes) * 100)),
+            source: 'google_drive_api',
+            note: undefined,
+          },
+        };
+      }
+
+      return {
+        ...metrics,
+        storage: {
+          ...metrics.storage,
+          note: quota.note || metrics.storage.note,
+        },
+      };
+    } catch {
+      return {
+        ...metrics,
+        storage: {
+          ...metrics.storage,
+          note: 'Google Drive OAuth token requires reauthorization to query storage quota.',
+        },
+      };
     }
   }
 }

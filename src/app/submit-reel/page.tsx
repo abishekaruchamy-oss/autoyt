@@ -9,9 +9,6 @@ import {
   RefreshCw,
   ExternalLink,
   ShieldCheck,
-  PlayCircle,
-  Copy,
-  Info,
   HardDrive,
   Layers,
   ChevronRight,
@@ -19,7 +16,8 @@ import {
 import { YouTubeIcon } from '@/components/ui/Icons';
 import { UploadJob, PublishingVisibility } from '@/types';
 import { getJobStatusBadge, formatRelativeTime } from '@/lib/utils';
-import { authFetch } from '@/lib/clientAuthFetch';
+import { fetchJsonWithTimeout } from '@/lib/apiClient';
+import { InlineNoticeBanner } from '@/components/ui/PageStateCard';
 
 export default function SubmitReelPage() {
   const [reelUrl, setReelUrl] = useState('');
@@ -37,25 +35,30 @@ export default function SubmitReelPage() {
 
   const [jobs, setJobs] = useState<UploadJob[]>([]);
   const [loadingJobs, setLoadingJobs] = useState(true);
+  const [loadJobsError, setLoadJobsError] = useState<string | null>(null);
 
   // Live client-side shortcode extraction
   const extractedShortcode = useMemo(() => {
     if (!reelUrl.trim()) return null;
-    const match = reelUrl.match(/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]{9,15})/i);
+    const match = reelUrl.match(/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]{9,25})/i);
     if (match && match[1]) return match[1];
-    if (/^[A-Za-z0-9_-]{9,15}$/.test(reelUrl.trim())) return reelUrl.trim();
+    if (/^[A-Za-z0-9_-]{9,25}$/.test(reelUrl.trim())) return reelUrl.trim();
     return null;
   }, [reelUrl]);
 
   const fetchJobs = useCallback(async () => {
     try {
-      const res = await authFetch('/api/reels');
-      const data = (await res.json()) as { success: boolean; jobs?: UploadJob[] };
-      if (data.success && data.jobs) {
-        setJobs(data.jobs);
+      const res = await fetchJsonWithTimeout<{
+        success: boolean;
+        jobs?: UploadJob[];
+        error?: string;
+      }>('/api/reels');
+      if (res.ok && res.data?.success && res.data.jobs) {
+        setJobs(res.data.jobs);
+        setLoadJobsError(null);
+      } else {
+        setLoadJobsError(res.error || res.data?.error || 'Failed to load queue state.');
       }
-    } catch (err) {
-      console.error('Failed to load submitted reels:', err);
     } finally {
       setLoadingJobs(false);
     }
@@ -71,9 +74,33 @@ export default function SubmitReelPage() {
     e.preventDefault();
     setSubmissionFeedback(null);
 
-    if (!reelUrl.trim()) {
-      setSubmissionFeedback({ type: 'error', message: 'Please enter a valid Instagram Reel URL.' });
+    if (!reelUrl.trim() || !extractedShortcode) {
+      setSubmissionFeedback({
+        type: 'error',
+        message:
+          'Please enter a valid Instagram Reel URL or shortcode (e.g. https://www.instagram.com/reel/C3b4XyzABC1/).',
+      });
       return;
+    }
+
+    const trimmedDirectUrl = directVideoUrl.trim();
+    if (trimmedDirectUrl) {
+      try {
+        const parsed = new URL(trimmedDirectUrl);
+        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+          setSubmissionFeedback({
+            type: 'error',
+            message: 'Creator-authorized direct media URL must use https:// or http://.',
+          });
+          return;
+        }
+      } catch {
+        setSubmissionFeedback({
+          type: 'error',
+          message: 'Invalid direct media URL format.',
+        });
+        return;
+      }
     }
 
     if (!confirmedRights) {
@@ -86,60 +113,68 @@ export default function SubmitReelPage() {
 
     setSubmitting(true);
     try {
-      const res = await authFetch('/api/reels/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          reelUrl: reelUrl.trim(),
-          directVideoUrl: directVideoUrl.trim() || undefined,
-          captionOverride: captionOverride.trim() || undefined,
-          visibility,
-          confirmedRights,
-          sandbox: useSandbox,
-        }),
-      });
-
-      const data = (await res.json()) as {
+      const res = await fetchJsonWithTimeout<{
         success: boolean;
         message?: string;
         error?: string;
         job?: UploadJob;
-      };
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Failed to submit Reel');
+      }>(
+        '/api/reels/submit',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            reelUrl: reelUrl.trim(),
+            directVideoUrl: trimmedDirectUrl || undefined,
+            captionOverride: captionOverride.trim() || undefined,
+            visibility,
+            confirmedRights,
+            sandbox: useSandbox,
+          }),
+        },
+        20000
+      );
+
+      if (res.ok && res.data?.success) {
+        setSubmissionFeedback({
+          type: 'success',
+          message:
+            res.data.message ||
+            `Reel submitted successfully! Current status: ${res.data.job?.status ?? 'SUBMITTED'}`,
+        });
+        setReelUrl('');
+        setDirectVideoUrl('');
+        setCaptionOverride('');
+        setConfirmedRights(false);
+        await fetchJobs();
+      } else {
+        setSubmissionFeedback({
+          type: 'error',
+          message: res.error || res.data?.error || 'Failed to process Reel submission.',
+        });
       }
-
-      setSubmissionFeedback({
-        type: 'success',
-        message: data.message || `Reel submitted successfully! Current status: ${data.job?.status}`,
-      });
-
-      // Clear input fields on success
-      setReelUrl('');
-      setDirectVideoUrl('');
-      setCaptionOverride('');
-      setConfirmedRights(false);
-
-      await fetchJobs();
-    } catch (err) {
-      setSubmissionFeedback({
-        type: 'error',
-        message: (err as Error).message || 'An error occurred during submission.',
-      });
     } finally {
       setSubmitting(false);
     }
   };
 
   const handleRetry = async (jobId: string) => {
-    try {
-      const res = await authFetch(`/api/uploads/${jobId}/retry`, { method: 'POST' });
-      const data = (await res.json()) as { success: boolean; error?: string };
-      if (data.success) {
-        await fetchJobs();
-      }
-    } catch (err) {
-      console.error('Retry failed:', err);
+    const res = await fetchJsonWithTimeout<{ success: boolean; error?: string }>(
+      `/api/uploads/${jobId}/retry`,
+      { method: 'POST' },
+      20000
+    );
+    if (res.ok && res.data?.success) {
+      setSubmissionFeedback({
+        type: 'success',
+        message: 'Retry request processed cleanly.',
+      });
+      await fetchJobs();
+    } else {
+      setSubmissionFeedback({
+        type: 'error',
+        message: res.error || res.data?.error || 'Retry failed.',
+      });
     }
   };
 
@@ -220,11 +255,11 @@ export default function SubmitReelPage() {
 
             {/* Direct Video / Authorized Stream URL (Optional) */}
             <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <label className="text-xs font-semibold text-zinc-300">
                   Creator-Authorized Direct Video Stream / CDN Link <span className="text-zinc-500 font-normal">(Optional)</span>
                 </label>
-                <span className="text-[11px] text-zinc-500">Bypasses platform login gate</span>
+                <span className="text-[11px] text-zinc-400">Authorized MP4 / CDN origin</span>
               </div>
               <input
                 type="url"
@@ -443,7 +478,21 @@ export default function SubmitReelPage() {
         </div>
 
         <div className="bg-zinc-900/40 border border-zinc-800/80 rounded-2xl overflow-hidden shadow-xl">
-          {jobs.length === 0 ? (
+          {loadJobsError && (
+            <div className="p-4 border-b border-zinc-800/80">
+              <InlineNoticeBanner
+                type="warning"
+                message={`Unable to refresh Reel queue: ${loadJobsError}`}
+                onDismiss={() => setLoadJobsError(null)}
+              />
+            </div>
+          )}
+          {loadingJobs && jobs.length === 0 ? (
+            <div className="p-10 text-center space-y-2 text-xs text-zinc-400">
+              <RefreshCw className="w-5 h-5 animate-spin text-rose-500 mx-auto" />
+              <p>Loading Reel submission queue...</p>
+            </div>
+          ) : jobs.length === 0 ? (
             <div className="p-12 text-center space-y-3">
               <Film className="w-8 h-8 text-zinc-600 mx-auto" />
               <p className="text-sm text-zinc-400 font-medium">No Reels submitted yet.</p>

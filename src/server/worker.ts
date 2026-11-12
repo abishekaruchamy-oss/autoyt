@@ -145,7 +145,7 @@ export default {
       if (path === '/api/dashboard' && method === 'GET') {
         const authFailure = requireWorkerAdmin();
         if (authFailure) return authFailure;
-        const metrics = await Repository.getDashboardMetrics();
+        const metrics = await PipelineService.getEnrichedDashboardMetrics();
         return new Response(JSON.stringify(metrics), { status: 200, headers: jsonHeaders });
       }
 

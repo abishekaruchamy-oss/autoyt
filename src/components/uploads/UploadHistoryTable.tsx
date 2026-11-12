@@ -3,7 +3,6 @@
 import React, { useState } from 'react';
 import {
   UploadJob,
-  JobStatus,
   InstagramAccount,
 } from '@/types';
 import {
@@ -12,11 +11,6 @@ import {
   ExternalLink,
   RotateCcw,
   Search,
-  Filter,
-  AlertTriangle,
-  CheckCircle2,
-  Clock,
-  Eye,
   Info,
 } from 'lucide-react';
 import { Instagram } from '@/components/ui/Icons';
@@ -380,10 +374,13 @@ export function UploadHistoryTable({
 
       {/* Details Modal */}
       {selectedJob && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-zinc-950 border border-zinc-800 rounded-3xl w-full max-w-md p-6 shadow-2xl relative space-y-4">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-zinc-950 border border-zinc-800 rounded-3xl w-full max-w-lg p-6 shadow-2xl relative space-y-4 my-auto">
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-white">Upload Job Details</h3>
+              <div>
+                <h3 className="text-base font-bold text-white">Upload Job Details</h3>
+                <span className="text-[11px] font-mono text-zinc-500">{selectedJob.id}</span>
+              </div>
               <button
                 type="button"
                 onClick={() => setSelectedJob(null)}
@@ -394,35 +391,147 @@ export function UploadHistoryTable({
             </div>
 
             <div className="space-y-3 text-xs text-zinc-300">
-              <div>
-                <span className="text-zinc-400 block text-[10px] uppercase font-bold">Caption</span>
-                <p className="mt-1 bg-zinc-900 p-2.5 rounded-xl border border-zinc-800 whitespace-pre-wrap">
-                  {selectedJob.caption}
-                </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-zinc-900/60 p-3 rounded-2xl border border-zinc-800/80">
+                <div>
+                  <span className="text-zinc-400 block text-[10px] uppercase font-bold">
+                    Submission Timestamp
+                  </span>
+                  <span className="text-white font-medium block mt-0.5">
+                    {new Date(selectedJob.created_at).toLocaleString()}
+                  </span>
+                  <span className="text-[10px] text-zinc-500">
+                    ({formatRelativeTime(selectedJob.created_at)})
+                  </span>
+                </div>
+                <div>
+                  <span className="text-zinc-400 block text-[10px] uppercase font-bold">
+                    Source Account
+                  </span>
+                  <span className="text-white font-semibold block mt-0.5">
+                    @{selectedJob.account_username}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-zinc-400 block text-[10px] uppercase font-bold">
+                    Media Source
+                  </span>
+                  <span className="text-zinc-200 font-mono text-[11px] block mt-0.5">
+                    {selectedJob.media_source_type || 'PUBLIC_PROBE'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-zinc-400 block text-[10px] uppercase font-bold">
+                    Pipeline Status
+                  </span>
+                  <span className="text-white font-semibold block mt-0.5">{selectedJob.status}</span>
+                </div>
+                <div>
+                  <span className="text-zinc-400 block text-[10px] uppercase font-bold">
+                    Google Drive Archival
+                  </span>
+                  {selectedJob.drive_file_id ? (
+                    <a
+                      href={
+                        selectedJob.drive_file_url ||
+                        `https://drive.google.com/file/d/${selectedJob.drive_file_id}/view`
+                      }
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-cyan-400 hover:underline font-medium inline-block mt-0.5"
+                    >
+                      Archived ({selectedJob.drive_file_id.slice(0, 12)}…)
+                    </a>
+                  ) : (
+                    <span className="text-zinc-400 block mt-0.5">Not archived</span>
+                  )}
+                </div>
+                <div>
+                  <span className="text-zinc-400 block text-[10px] uppercase font-bold">
+                    YouTube Publishing Status
+                  </span>
+                  {selectedJob.youtube_video_id ? (
+                    <a
+                      href={
+                        selectedJob.youtube_video_url ||
+                        `https://youtube.com/shorts/${selectedJob.youtube_video_id}`
+                      }
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-rose-400 hover:underline font-semibold inline-block mt-0.5"
+                    >
+                      Published ({selectedJob.youtube_video_id})
+                    </a>
+                  ) : (
+                    <span className="text-zinc-400 block mt-0.5">Not published</span>
+                  )}
+                </div>
+                <div>
+                  <span className="text-zinc-400 block text-[10px] uppercase font-bold">
+                    Retry Information
+                  </span>
+                  <span className="text-zinc-200 font-medium block mt-0.5">
+                    {selectedJob.retry_count} of {selectedJob.max_retries} attempts used
+                  </span>
+                </div>
+                <div>
+                  <span className="text-zinc-400 block text-[10px] uppercase font-bold">
+                    Completed At
+                  </span>
+                  <span className="text-zinc-200 block mt-0.5">
+                    {selectedJob.completed_at
+                      ? new Date(selectedJob.completed_at).toLocaleString()
+                      : 'Pending'}
+                  </span>
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <span className="text-zinc-400 block text-[10px] uppercase font-bold">Account</span>
-                  <span className="text-white font-semibold">@{selectedJob.account_username}</span>
-                </div>
-                <div>
-                  <span className="text-zinc-400 block text-[10px] uppercase font-bold">Status</span>
-                  <span className="text-white font-semibold">{selectedJob.status}</span>
-                </div>
+              <div>
+                <span className="text-zinc-400 block text-[10px] uppercase font-bold">
+                  Original Reel URL
+                </span>
+                <a
+                  href={selectedJob.original_reel_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-1 block bg-zinc-900 p-2.5 rounded-xl border border-zinc-800 font-mono text-[11px] text-pink-400 hover:underline break-all"
+                >
+                  {selectedJob.original_reel_url}
+                </a>
+              </div>
+
+              <div>
+                <span className="text-zinc-400 block text-[10px] uppercase font-bold">Caption</span>
+                <p className="mt-1 bg-zinc-900 p-2.5 rounded-xl border border-zinc-800 whitespace-pre-wrap max-h-32 overflow-y-auto">
+                  {selectedJob.caption || 'No caption provided'}
+                </p>
               </div>
 
               {selectedJob.error_details && (
                 <div>
-                  <span className="text-rose-400 block text-[10px] uppercase font-bold">Error Message</span>
-                  <p className="mt-1 bg-rose-500/10 text-rose-300 p-2.5 rounded-xl border border-rose-500/20 font-mono text-[11px]">
+                  <span className="text-rose-400 block text-[10px] uppercase font-bold">
+                    Failure / Blocking Reason
+                  </span>
+                  <p className="mt-1 bg-rose-500/10 text-rose-300 p-2.5 rounded-xl border border-rose-500/20 font-mono text-[11px] break-words">
                     {selectedJob.error_details}
                   </p>
                 </div>
               )}
             </div>
 
-            <div className="pt-2 border-t border-zinc-800 text-right">
+            <div className="pt-2 border-t border-zinc-800 flex items-center justify-end gap-2">
+              {(selectedJob.status === 'FAILED' || selectedJob.status === 'AMBIGUOUS_UPLOAD') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const id = selectedJob.id;
+                    setSelectedJob(null);
+                    handleRetry(id);
+                  }}
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-semibold"
+                >
+                  {selectedJob.status === 'AMBIGUOUS_UPLOAD' ? 'Reconcile Upload' : 'Retry Job'}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setSelectedJob(null)}

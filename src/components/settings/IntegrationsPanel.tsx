@@ -17,12 +17,19 @@ import {
 import { Instagram } from '@/components/ui/Icons';
 import { authFetch } from '@/lib/clientAuthFetch';
 import type { OAuthBannerFeedback } from '@/lib/oauthFeedback';
-import { IntegrationStatus, AutomationSettings, PublishingVisibility } from '@/types';
+import {
+  IntegrationStatus,
+  AutomationSettings,
+  PublishingVisibility,
+  ExecutionReadiness,
+} from '@/types';
 import Link from 'next/link';
 
 interface IntegrationsPanelProps {
   integrations: IntegrationStatus;
   automation: AutomationSettings;
+  readiness?: ExecutionReadiness;
+  isProduction?: boolean;
   accountsCount: number;
   oauthBanner?: OAuthBannerFeedback | null;
   onDismissOAuthBanner?: () => void;
@@ -32,6 +39,8 @@ interface IntegrationsPanelProps {
 export function IntegrationsPanel({
   integrations,
   automation,
+  readiness,
+  isProduction = false,
   accountsCount,
   oauthBanner,
   onDismissOAuthBanner,
@@ -119,14 +128,22 @@ export function IntegrationsPanel({
   };
 
   const handleResetDemo = async () => {
-    if (confirm('Reset all demo state to original sample records?')) {
+    if (isProduction) {
+      setSyncMessage('Demo reset is disabled in production Cloudflare D1 environments.');
+      return;
+    }
+    if (
+      confirm(
+        'Reset local non-production development data back to sample records? This affects local memory only and is permanently disabled in production D1.'
+      )
+    ) {
       const res = await authFetch('/api/demo/reset', { method: 'POST' });
       const data = (await res.json()) as { success?: boolean; error?: string };
       if (!res.ok || !data.success) {
-        alert(data.error || 'Demo reset is unavailable.');
+        setSyncMessage(`Reset blocked: ${data.error || 'Demo reset is unavailable.'}`);
         return;
       }
-      window.location.reload();
+      onUpdate();
     }
   };
 
@@ -336,37 +353,48 @@ export function IntegrationsPanel({
                   <span className="text-xs text-zinc-400">Workers + D1 + Cron</span>
                 </div>
               </div>
-              <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
-                <CheckCircle2 className="w-3 h-3" /> Ready
-              </span>
+              {readiness?.ready_for_live_upload ? (
+                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3" /> Live Ready
+                </span>
+              ) : (
+                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-300 border border-amber-500/20 flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3" /> Setup Incomplete
+                </span>
+              )}
             </div>
 
             <p className="text-xs text-zinc-400 leading-relaxed mb-4">
-              Production target executes on Cloudflare edge workers with zero container overhead and automated Cron triggers.
+              Executes on Cloudflare Workers with Cloudflare D1 persistence and scheduled Cron triggers. Live upload execution remains blocked until required integrations and a monitored profile pass readiness checks.
             </p>
 
             <div className="space-y-2.5 bg-zinc-950/60 p-4 rounded-2xl border border-zinc-800/80 text-xs">
-              <div className="flex justify-between">
+              <div className="flex justify-between gap-2">
                 <span className="text-zinc-400">Cron Schedule:</span>
                 <span className="font-mono text-zinc-300">*/30 * * * * (Every 30m)</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between gap-2">
                 <span className="text-zinc-400">Database Binding:</span>
-                <span className="font-mono text-zinc-300">DB (autoshorts-d1)</span>
+                <span className="font-mono text-zinc-300">DB (autoshorts-db)</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between gap-2">
                 <span className="text-zinc-400">Concurrency Lock:</span>
-                <span className="text-emerald-400 font-semibold">Active & Mutex-Protected</span>
+                <span className="text-emerald-400 font-semibold">D1 Atomic Mutex</span>
               </div>
             </div>
           </div>
 
-          <div className="pt-2">
+          <div className="pt-2 space-y-2">
+            {readiness && !readiness.ready_for_live_upload && (
+              <p className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2 leading-relaxed">
+                Readiness blocked: {readiness.blocking_reasons.join(' ')}
+              </p>
+            )}
             <button
               type="button"
-              disabled={syncing}
+              disabled={syncing || (readiness ? !readiness.ready_for_live_upload : false)}
               onClick={handleTriggerSync}
-              className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+              className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Play className="w-3.5 h-3.5" />
               <span>{syncing ? 'Running Sync Pipeline...' : 'Run Pipeline Sync Now'}</span>
@@ -374,7 +402,7 @@ export function IntegrationsPanel({
           </div>
         </div>
 
-        {/* 4. Security & API Quotas */}
+        {/* 4. Security, AutoShorts Limits, Cloudflare & Google Quotas */}
         <div className="bg-zinc-900/60 border border-zinc-800 rounded-3xl p-6 flex flex-col justify-between space-y-4">
           <div>
             <div className="flex items-center justify-between mb-3">
@@ -383,50 +411,74 @@ export function IntegrationsPanel({
                   <Shield className="w-5 h-5" />
                 </div>
                 <div>
-                  <h4 className="text-base font-bold text-white">Quotas & Security</h4>
-                  <span className="text-xs text-zinc-400">Safety Ceilings</span>
+                  <h4 className="text-base font-bold text-white">Limits, Platform & API Quotas</h4>
+                  <span className="text-xs text-zinc-400">App, Cloudflare & Google Boundaries</span>
                 </div>
               </div>
               <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                Protected
+                AES-256-GCM
               </span>
             </div>
 
             <p className="text-xs text-zinc-400 leading-relaxed mb-4">
-              All credentials encrypted at rest. YouTube API quotas are capped to stay comfortably within free-tier allowances.
+              AutoShorts application ceilings are configured in D1 independently from Cloudflare Workers execution limits and upstream Google OAuth API quotas.
             </p>
 
             <div className="space-y-2.5 bg-zinc-950/60 p-4 rounded-2xl border border-zinc-800/80 text-xs">
-              <div className="flex justify-between">
-                <span className="text-zinc-400">Token Encryption:</span>
-                <span className="text-emerald-400 font-semibold">AES-256-GCM Active</span>
+              <div className="flex justify-between gap-2">
+                <span className="text-zinc-400">AutoShorts Daily Cap:</span>
+                <span className="font-semibold text-zinc-200">
+                  {readiness ? `${readiness.daily_uploads_used} / ` : ''}
+                  {automation.max_uploads_per_day} uploads/day
+                </span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-zinc-400">Daily Upload Ceiling:</span>
-                <span className="font-semibold text-zinc-200">{automation.max_uploads_per_day} uploads/day (Configurable)</span>
+              <div className="flex justify-between gap-2">
+                <span className="text-zinc-400">Cloudflare Chunk Streaming:</span>
+                <span className="text-zinc-300 font-mono text-[11px]">5 MB resumable buffers</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-zinc-400">YouTube Upload Limit Bucket:</span>
-                <span className="text-zinc-400 font-mono text-[11px]">~100 uploads/day limit</span>
+              <div className="flex justify-between gap-2">
+                <span className="text-zinc-400">Google API Quota State:</span>
+                <span
+                  className={
+                    integrations.youtube.connected && integrations.google_drive.connected
+                      ? 'text-emerald-400 font-semibold'
+                      : 'text-amber-300 font-semibold'
+                  }
+                >
+                  {integrations.youtube.connected && integrations.google_drive.connected
+                    ? 'Connected (OAuth Active)'
+                    : 'Not Connected (N/A)'}
+                </span>
               </div>
             </div>
           </div>
 
           <div className="pt-2 text-center text-[11px] text-zinc-500">
-            Resumable 5MB streaming chunks prevent memory spikes.
+            Encrypted Google credentials are never returned in API payloads.
           </div>
         </div>
 
-        {/* Submit & Reset Bar */}
+        {/* Submit & Production-Safe Dev Reset Bar */}
         <div className="md:col-span-2 flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-zinc-800">
-          <button
-            type="button"
-            onClick={handleResetDemo}
-            className="flex items-center gap-2 text-xs text-zinc-400 hover:text-zinc-200 px-4 py-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 transition-colors"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span>Reset Demo State</span>
-          </button>
+          {!isProduction ? (
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
+              <button
+                type="button"
+                onClick={handleResetDemo}
+                className="flex items-center gap-2 text-xs text-zinc-400 hover:text-zinc-200 px-4 py-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 transition-colors"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset Local Dev Store</span>
+              </button>
+              <span className="text-[11px] text-zinc-500">
+                Resets local non-production memory only (disabled on production D1).
+              </span>
+            </div>
+          ) : (
+            <span className="text-[11px] text-zinc-500">
+              Production safeguard active: demo reset is disabled on Cloudflare D1.
+            </span>
+          )}
 
           <button
             type="submit"

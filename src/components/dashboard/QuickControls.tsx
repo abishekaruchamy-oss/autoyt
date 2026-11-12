@@ -11,50 +11,73 @@ import {
   Cpu,
   ChevronRight,
 } from 'lucide-react';
-import { AutomationSettings } from '@/types';
-import { authFetch } from '@/lib/clientAuthFetch';
+import { AutomationSettings, ExecutionReadiness } from '@/types';
+import { fetchJsonWithTimeout } from '@/lib/apiClient';
 import { formatRelativeTime } from '@/lib/utils';
 
 interface QuickControlsProps {
   automation: AutomationSettings;
+  readiness?: ExecutionReadiness;
   onUpdate: () => void;
+  onNotice?: (notice: { type: 'success' | 'error' | 'warning'; message: string }) => void;
 }
 
-export function QuickControls({ automation, onUpdate }: QuickControlsProps) {
+export function QuickControls({ automation, readiness, onUpdate, onNotice }: QuickControlsProps) {
   const [toggling, setToggling] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
   const handleToggle = async () => {
     try {
       setToggling(true);
-      const res = await authFetch('/api/automation', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ is_enabled: !automation.is_enabled }),
-      });
-      const data = (await res.json()) as { success: boolean; error?: string };
-      if (data.success) {
+      const res = await fetchJsonWithTimeout<{ success: boolean; error?: string }>(
+        '/api/automation',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ is_enabled: !automation.is_enabled }),
+        }
+      );
+      if (res.ok && res.data?.success) {
         onUpdate();
+      } else {
+        onNotice?.({
+          type: 'error',
+          message: res.error || res.data?.error || 'Failed to update automation state.',
+        });
       }
-    } catch {
-      alert('Failed to update automation state');
     } finally {
       setToggling(false);
     }
   };
 
   const handleSyncNow = async () => {
+    if (readiness && !readiness.ready_for_live_upload) {
+      onNotice?.({
+        type: 'warning',
+        message: `Live sync blocked: ${readiness.blocking_reasons.join(' ')}`,
+      });
+      return;
+    }
+
     try {
       setSyncing(true);
-      const res = await authFetch('/api/automation/sync-now', { method: 'POST' });
-      const data = (await res.json()) as { success: boolean; error?: string };
-      if (data.success) {
+      const res = await fetchJsonWithTimeout<{ success: boolean; message?: string; error?: string }>(
+        '/api/automation/sync-now',
+        { method: 'POST' },
+        20000
+      );
+      if (res.ok && res.data?.success) {
+        onNotice?.({
+          type: 'success',
+          message: res.data.message || 'Manual sync completed.',
+        });
         onUpdate();
       } else {
-        alert(data.error || 'Sync failed');
+        onNotice?.({
+          type: 'error',
+          message: res.error || res.data?.error || 'Sync failed.',
+        });
       }
-    } catch {
-      alert('Error triggering sync');
     } finally {
       setSyncing(false);
     }
@@ -148,9 +171,15 @@ export function QuickControls({ automation, onUpdate }: QuickControlsProps) {
             </span>
           </div>
           <button
+            type="button"
             onClick={handleSyncNow}
-            disabled={syncing || automation.is_running}
-            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white flex items-center gap-1.5 transition-all shadow-sm disabled:opacity-50"
+            disabled={syncing || automation.is_running || (readiness ? !readiness.ready_for_live_upload : false)}
+            title={
+              readiness && !readiness.ready_for_live_upload
+                ? readiness.blocking_reasons.join(' ')
+                : 'Trigger manual sync check'
+            }
+            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white flex items-center gap-1.5 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
             <span>{syncing ? 'Syncing...' : 'Sync Now'}</span>

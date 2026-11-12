@@ -14,15 +14,20 @@ export async function GET(request: NextRequest) {
   if (authError) return authError;
 
   try {
-    const integrations = await Repository.getIntegrations();
-    const automation = await Repository.getAutomationSettings();
-    const accounts = await Repository.getAccounts();
+    const [integrations, automation, accounts, readiness] = await Promise.all([
+      Repository.getIntegrations(),
+      Repository.getAutomationSettings(),
+      Repository.getAccounts(),
+      Repository.evaluateExecutionReadiness(),
+    ]);
 
     return NextResponse.json(
       {
         success: true,
         integrations,
         automation,
+        readiness,
+        is_production: process.env.NODE_ENV === 'production',
         accounts_count: accounts.length,
       },
       { headers: NO_STORE_HEADERS }
@@ -53,8 +58,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const currentIntegrations = await Repository.getIntegrations();
-    const currentAutomation = await Repository.getAutomationSettings();
+    const [currentIntegrations, currentAutomation, readiness] = await Promise.all([
+      Repository.getIntegrations(),
+      Repository.getAutomationSettings(),
+      Repository.evaluateExecutionReadiness(),
+    ]);
 
     return NextResponse.json(
       {
@@ -62,13 +70,16 @@ export async function POST(request: NextRequest) {
         message: 'Settings updated successfully',
         integrations: currentIntegrations,
         automation: currentAutomation,
+        readiness,
       },
       { headers: NO_STORE_HEADERS }
     );
   } catch (error) {
+    const msg = sanitizeErrorMessage(error, 'Failed to update settings.');
+    const status = /must be|invalid/i.test(msg) ? 400 : 500;
     return NextResponse.json(
-      { success: false, error: sanitizeErrorMessage(error, 'Failed to update settings.') },
-      { status: 500, headers: NO_STORE_HEADERS }
+      { success: false, error: msg },
+      { status, headers: NO_STORE_HEADERS }
     );
   }
 }

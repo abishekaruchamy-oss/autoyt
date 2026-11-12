@@ -1,37 +1,54 @@
 'use client';
 
 import React, { useEffect, useState, useCallback } from 'react';
-import { AutomationSettings, InstagramAccount } from '@/types';
+import { AutomationSettings, InstagramAccount, ExecutionReadiness } from '@/types';
 import { AutomationSettingsForm } from '@/components/automation/AutomationSettingsForm';
 import { WorkflowEndpointsCard } from '@/components/automation/WorkflowEndpointsCard';
-import { authFetch } from '@/lib/clientAuthFetch';
-import { Cpu, RefreshCw } from 'lucide-react';
+import { fetchJsonWithTimeout } from '@/lib/apiClient';
+import {
+  PageLoadingSkeleton,
+  PageErrorBanner,
+  InlineNoticeBanner,
+} from '@/components/ui/PageStateCard';
+import { Cpu } from 'lucide-react';
 
 export default function AutomationPage() {
   const [automation, setAutomation] = useState<AutomationSettings | null>(null);
+  const [readiness, setReadiness] = useState<ExecutionReadiness | null>(null);
   const [accounts, setAccounts] = useState<InstagramAccount[]>([]);
   const [loading, setLoading] = useState(true);
+  const [retrying, setRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
+      setRetrying(true);
       const [autoRes, accRes] = await Promise.all([
-        authFetch('/api/automation'),
-        authFetch('/api/accounts'),
+        fetchJsonWithTimeout<{
+          success: boolean;
+          automation?: AutomationSettings;
+          readiness?: ExecutionReadiness;
+          error?: string;
+        }>('/api/automation'),
+        fetchJsonWithTimeout<{ success: boolean; accounts?: InstagramAccount[]; error?: string }>(
+          '/api/accounts'
+        ),
       ]);
 
-      const autoData = (await autoRes.json()) as { success: boolean; automation?: AutomationSettings };
-      const accData = (await accRes.json()) as { success: boolean; accounts?: InstagramAccount[] };
+      if (autoRes.ok && autoRes.data?.success && autoRes.data.automation) {
+        setAutomation(autoRes.data.automation);
+        setReadiness(autoRes.data.readiness || null);
+        setLoadError(null);
+      } else {
+        setLoadError(autoRes.error || autoRes.data?.error || 'Failed to load automation settings.');
+      }
 
-      if (autoData.success && autoData.automation) {
-        setAutomation(autoData.automation);
+      if (accRes.ok && accRes.data?.success && accRes.data.accounts) {
+        setAccounts(accRes.data.accounts);
       }
-      if (accData.success && accData.accounts) {
-        setAccounts(accData.accounts);
-      }
-    } catch (err) {
-      console.error('Failed to load automation config:', err);
     } finally {
       setLoading(false);
+      setRetrying(false);
     }
   }, []);
 
@@ -39,17 +56,30 @@ export default function AutomationPage() {
     fetchData();
   }, [fetchData]);
 
-  if (loading || !automation) {
+  if (loading) {
+    return <PageLoadingSkeleton label="Loading automation settings..." />;
+  }
+
+  if (!automation) {
     return (
-      <div className="flex items-center justify-center min-h-[60vh] text-zinc-400 gap-2 text-xs">
-        <RefreshCw className="w-5 h-5 animate-spin text-rose-500" />
-        <span>Loading automation settings...</span>
-      </div>
+      <PageErrorBanner
+        message={loadError || 'Automation settings are temporarily unavailable.'}
+        onRetry={fetchData}
+        retrying={retrying}
+      />
     );
   }
 
   return (
     <div className="p-4 sm:p-8 space-y-8 max-w-7xl w-full mx-auto">
+      {loadError && (
+        <InlineNoticeBanner
+          type="warning"
+          message={`Refresh warning: ${loadError}`}
+          onDismiss={() => setLoadError(null)}
+        />
+      )}
+
       {/* Page Title */}
       <div>
         <div className="flex items-center gap-2.5 mb-1">
@@ -61,9 +91,16 @@ export default function AutomationPage() {
           </h1>
         </div>
         <p className="text-xs text-zinc-400">
-          Manage polling schedules, execution locks, active creator source selection, and n8n webhook orchestrations.
+          Manage Cloudflare D1 polling configuration, execution locks, active monitored source, and optional webhook endpoints.
         </p>
       </div>
+
+      {readiness && !readiness.ready_for_live_upload && (
+        <InlineNoticeBanner
+          type="warning"
+          message={`Live upload execution readiness is blocked: ${readiness.blocking_reasons.join(' ')}`}
+        />
+      )}
 
       {/* Settings Form */}
       <AutomationSettingsForm

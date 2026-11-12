@@ -9,7 +9,6 @@ import {
   RotateCcw,
   Trash2,
   Clock,
-  AlertCircle,
   Copy,
   ShieldCheck,
   ArrowRightLeft,
@@ -39,7 +38,7 @@ function getStatusBadge(status: ProfileMonitoringStatus): {
         bg: 'bg-emerald-500/10',
         text: 'text-emerald-400',
         border: 'border-emerald-500/20',
-        label: 'Active & Monitored',
+        label: 'Profile Accessible',
       };
     case 'PAUSED':
       return {
@@ -53,7 +52,7 @@ function getStatusBadge(status: ProfileMonitoringStatus): {
         bg: 'bg-purple-500/10',
         text: 'text-purple-400',
         border: 'border-purple-500/20',
-        label: 'Platform Gated',
+        label: 'Authorized Media Required',
       };
     case 'NOT_FOUND':
       return {
@@ -68,7 +67,7 @@ function getStatusBadge(status: ProfileMonitoringStatus): {
         bg: 'bg-rose-500/10',
         text: 'text-rose-400',
         border: 'border-rose-500/20',
-        label: 'Check Error',
+        label: 'Retrieval Failed',
       };
   }
 }
@@ -211,13 +210,39 @@ export function ProfileCard({
         </div>
 
         {/* Status Reason Callout (Honest Reporting) */}
-        <div className="p-3 bg-zinc-950/80 rounded-xl border border-zinc-800/80 text-xs mb-3">
-          <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-400 mb-1">
-            <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Monitoring State</span>
+        <div className="p-3 bg-zinc-950/80 rounded-xl border border-zinc-800/80 text-xs mb-3 space-y-2">
+          <div className="flex items-center justify-between gap-2 text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+            <div className="flex items-center gap-1.5">
+              <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Honest Probe State</span>
+            </div>
+            <span className="font-mono text-[10px] text-zinc-400 normal-case font-normal">
+              URL registered
+            </span>
           </div>
+
           <p className="text-[11px] text-zinc-300 leading-relaxed">{profile.status_reason}</p>
-          <div className="flex items-center gap-1 mt-2 text-[10px] text-zinc-400">
+
+          <div className="grid grid-cols-2 gap-1.5 pt-1.5 border-t border-zinc-800/80 text-[10px]">
+            <div>
+              <span className="text-zinc-500 block">Reels Detected</span>
+              <span className="text-zinc-200 font-semibold">{profile.reels_detected_count}</span>
+            </div>
+            <div>
+              <span className="text-zinc-500 block">Media Ingestion</span>
+              <span
+                className={`font-semibold ${
+                  profile.reels_detected_count > 0 ? 'text-emerald-400' : 'text-amber-300'
+                }`}
+              >
+                {profile.reels_detected_count > 0
+                  ? 'Media available'
+                  : 'Authorized source required'}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1 pt-0.5 text-[10px] text-zinc-400">
             <Clock className="w-3 h-3 text-zinc-500" />
             <span>Last checked: {formatRelativeTime(profile.last_checked_at)}</span>
           </div>

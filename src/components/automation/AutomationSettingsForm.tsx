@@ -2,8 +2,6 @@
 
 import React, { useState } from 'react';
 import {
-  Play,
-  Pause,
   RefreshCw,
   Clock,
   ShieldCheck,
@@ -11,7 +9,6 @@ import {
   Sliders,
   Folder,
   Eye,
-  AlertCircle,
 } from 'lucide-react';
 import { Instagram } from '@/components/ui/Icons';
 import { AutomationSettings, InstagramAccount, PublishingVisibility } from '@/types';
@@ -110,7 +107,9 @@ export function AutomationSettingsForm({
         <div>
           <h3 className="text-xl font-bold text-white tracking-tight">Automation Engine</h3>
           <p className="text-xs text-zinc-400 mt-1">
-            Configure n8n polling schedule, active Instagram creator source, and YouTube upload limits.
+            <p className="text-xs text-zinc-400">
+          Configure Cloudflare Cron polling schedule, active monitored public profile, and YouTube Shorts upload limits in Cloudflare D1.
+        </p>
           </p>
         </div>
 
@@ -213,7 +212,9 @@ export function AutomationSettingsForm({
             ))}
           </select>
           <span className="text-[11px] text-zinc-400 block">
-            How frequently n8n queries Instagram Graph API for newly published Reels.
+            <span className="text-[11px] text-zinc-400 block">
+            Polling interval stored in Cloudflare D1 (Cloudflare Worker Cron triggers every 30 mins).
+          </span>
           </span>
         </div>
 
@@ -275,8 +276,10 @@ export function AutomationSettingsForm({
       </div>
 
       {/* Save Button */}
-      <div className="flex items-center justify-between pt-4 border-t border-zinc-800">
-        <span className="text-xs text-zinc-400">Changes take effect immediately on next n8n polling trigger.</span>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-zinc-800">
+        <span className="text-xs text-zinc-400">
+          Changes persist to Cloudflare D1 immediately for upcoming Cron runs and manual syncs.
+        </span>
         <button
           type="submit"
           disabled={saving}

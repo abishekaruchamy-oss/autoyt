@@ -7,7 +7,7 @@ const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
   title: 'AutoShorts | Instagram to YouTube Shorts Automation',
-  description: 'Production-ready multi-account Instagram Creator to YouTube Shorts automation dashboard powered by n8n, PostgreSQL and Google Drive.',
+  description: 'Production-ready public profile and creator-authorized Instagram Reel to Google Drive and YouTube Shorts pipeline on Cloudflare Workers & D1.',
 };
 
 export default function RootLayout({

@@ -4,55 +4,94 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import {
   RefreshCw,
-  CheckCircle2,
   AlertCircle,
   RotateCcw,
-  Sparkles,
 } from 'lucide-react';
-import { Instagram } from '@/components/ui/Icons';
-import { authFetch } from '@/lib/clientAuthFetch';
-import { InstagramAccount, AutomationSettings } from '@/types';
+import { InstagramAccount, AutomationSettings, ExecutionReadiness } from '@/types';
+import { fetchJsonWithTimeout } from '@/lib/apiClient';
 
 interface TopHeaderProps {
   activeAccount: InstagramAccount | null;
   automation: AutomationSettings | null;
+  readiness?: ExecutionReadiness;
+  isProduction?: boolean;
   onRefresh?: () => void;
+  onNotice?: (notice: { type: 'success' | 'error' | 'warning'; message: string }) => void;
 }
 
-export function TopHeader({ activeAccount, automation, onRefresh }: TopHeaderProps) {
+export function TopHeader({
+  activeAccount,
+  automation,
+  readiness,
+  isProduction = false,
+  onRefresh,
+  onNotice,
+}: TopHeaderProps) {
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   const handleManualSync = async () => {
+    if (readiness && !readiness.ready_for_live_upload) {
+      const reason = readiness.blocking_reasons.join(' ');
+      onNotice?.({
+        type: 'warning',
+        message: `Live sync blocked until readiness checks pass: ${reason}`,
+      });
+      return;
+    }
+
     try {
       setIsSyncing(true);
       setSyncMessage(null);
-      const res = await authFetch('/api/automation/sync-now', { method: 'POST' });
-      const data = (await res.json()) as { success: boolean; error?: string };
-      if (data.success) {
+      const res = await fetchJsonWithTimeout<{ success: boolean; message?: string; error?: string }>(
+        '/api/automation/sync-now',
+        { method: 'POST' },
+        20000
+      );
+      if (res.ok && res.data?.success) {
         setSyncMessage('Sync finished!');
+        onNotice?.({
+          type: 'success',
+          message: res.data.message || 'Automation sync completed.',
+        });
         setTimeout(() => setSyncMessage(null), 3000);
         if (onRefresh) onRefresh();
       } else {
-        alert(data.error || 'Failed to trigger sync');
+        onNotice?.({
+          type: 'error',
+          message: res.error || res.data?.error || 'Failed to trigger sync.',
+        });
       }
-    } catch {
-      alert('Network error while triggering sync');
     } finally {
       setIsSyncing(false);
     }
   };
 
   const handleResetDemo = async () => {
-    if (confirm('Reset all demo accounts, uploads, and logs back to the initial sample data?')) {
-      const res = await authFetch('/api/demo/reset', { method: 'POST' });
-      if (!res.ok) {
-        const data = (await res.json()) as { error?: string };
-        alert(data.error || 'Demo reset is unavailable.');
-        return;
+    if (isProduction) return;
+    if (
+      confirm(
+        'Reset local non-production development data? This restores sample profiles, jobs, and logs in local memory only and is disabled in production D1.'
+      )
+    ) {
+      try {
+        setIsResetting(true);
+        const res = await fetchJsonWithTimeout<{ success?: boolean; error?: string }>(
+          '/api/demo/reset',
+          { method: 'POST' }
+        );
+        if (!res.ok) {
+          onNotice?.({
+            type: 'error',
+            message: res.error || 'Demo reset is disabled in production.',
+          });
+          return;
+        }
+        if (onRefresh) onRefresh();
+      } finally {
+        setIsResetting(false);
       }
-      if (onRefresh) onRefresh();
-      window.location.reload();
     }
   };
 
@@ -106,21 +145,31 @@ export function TopHeader({ activeAccount, automation, onRefresh }: TopHeaderPro
 
       {/* Action Buttons */}
       <div className="flex items-center gap-2">
-        {/* Reset Demo Button */}
-        <button
-          onClick={handleResetDemo}
-          title="Reset demo data"
-          className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/80 hover:bg-zinc-800 rounded-lg border border-zinc-800 transition-colors"
-        >
-          <RotateCcw className="w-3.5 h-3.5" />
-          <span>Reset Demo</span>
-        </button>
+        {/* Reset Demo Button (non-production local development only) */}
+        {!isProduction && (
+          <button
+            type="button"
+            onClick={handleResetDemo}
+            disabled={isResetting}
+            title="Reset local non-production development data (disabled in production D1)"
+            className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/80 hover:bg-zinc-800 rounded-lg border border-zinc-800 transition-colors disabled:opacity-50"
+          >
+            <RotateCcw className={`w-3.5 h-3.5 ${isResetting ? 'animate-spin' : ''}`} />
+            <span>{isResetting ? 'Resetting...' : 'Reset Demo'}</span>
+          </button>
+        )}
 
         {/* Manual Sync Now Button */}
         <button
+          type="button"
           onClick={handleManualSync}
-          disabled={isSyncing}
-          className="flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white transition-all shadow-sm shadow-rose-600/30 disabled:opacity-50"
+          disabled={isSyncing || (readiness ? !readiness.ready_for_live_upload : false)}
+          title={
+            readiness && !readiness.ready_for_live_upload
+              ? readiness.blocking_reasons.join(' ')
+              : 'Trigger manual sync check'
+          }
+          className="flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white transition-all shadow-sm shadow-rose-600/30 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
           <span>{isSyncing ? 'Syncing...' : syncMessage || 'Sync Now'}</span>

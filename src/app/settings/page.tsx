@@ -2,19 +2,24 @@
 
 import React, { Suspense, useEffect, useState, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { IntegrationStatus, AutomationSettings } from '@/types';
+import { IntegrationStatus, AutomationSettings, ExecutionReadiness } from '@/types';
 import { IntegrationsPanel } from '@/components/settings/IntegrationsPanel';
 import { authFetch, redirectToPath } from '@/lib/clientAuthFetch';
+import { fetchJsonWithTimeout } from '@/lib/apiClient';
 import { resolveOAuthBannerFeedback } from '@/lib/oauthFeedback';
-import { Settings, RefreshCw, LogOut, AlertCircle } from 'lucide-react';
+import { PageLoadingSkeleton, PageErrorBanner } from '@/components/ui/PageStateCard';
+import { Settings, RefreshCw, LogOut } from 'lucide-react';
 
 function SettingsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [integrations, setIntegrations] = useState<IntegrationStatus | null>(null);
   const [automation, setAutomation] = useState<AutomationSettings | null>(null);
+  const [readiness, setReadiness] = useState<ExecutionReadiness | null>(null);
+  const [isProduction, setIsProduction] = useState(false);
   const [accountsCount, setAccountsCount] = useState<number>(0);
   const [loading, setLoading] = useState(true);
+  const [retrying, setRetrying] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dismissedBannerKey, setDismissedBannerKey] = useState<string | null>(null);
 
@@ -29,38 +34,50 @@ function SettingsContent() {
     oauthFeedback && dismissedBannerKey !== queryKey ? oauthFeedback : null;
 
   const fetchSettingsPayload = useCallback(async () => {
-    const res = await authFetch('/api/settings');
-    if (res.status === 401) {
-      return { redirected: true as const };
-    }
-    const data = (await res.json()) as {
+    const res = await fetchJsonWithTimeout<{
       success: boolean;
       integrations?: IntegrationStatus;
       automation?: AutomationSettings;
+      readiness?: ExecutionReadiness;
+      is_production?: boolean;
       accounts_count?: number;
       error?: string;
-    };
-    return { redirected: false as const, data };
+    }>('/api/settings');
+
+    if (res.status === 401) {
+      redirectToPath('/login?next=%2Fsettings');
+      return { redirected: true as const, data: null };
+    }
+
+    if (!res.ok || !res.data) {
+      return {
+        redirected: false as const,
+        data: { success: false, error: res.error || 'Failed to load integration settings.' },
+      };
+    }
+
+    return { redirected: false as const, data: res.data };
   }, []);
 
   const fetchData = useCallback(async () => {
     try {
+      setRetrying(true);
       const outcome = await fetchSettingsPayload();
-      if (outcome.redirected) return;
+      if (outcome.redirected || !outcome.data) return;
       const { data } = outcome;
       if (data.success && data.integrations && data.automation) {
         setLoadError(null);
         setIntegrations(data.integrations);
         setAutomation(data.automation);
+        setReadiness(data.readiness || null);
+        setIsProduction(Boolean(data.is_production));
         setAccountsCount(data.accounts_count ?? 0);
       } else {
         setLoadError(data.error || 'Failed to load integration settings.');
       }
-    } catch (err) {
-      console.error('Failed to load settings:', err);
-      setLoadError('Unable to reach settings API.');
     } finally {
       setLoading(false);
+      setRetrying(false);
     }
   }, [fetchSettingsPayload]);
 
@@ -68,20 +85,18 @@ function SettingsContent() {
     let active = true;
     fetchSettingsPayload()
       .then((outcome) => {
-        if (!active || outcome.redirected) return;
+        if (!active || outcome.redirected || !outcome.data) return;
         const { data } = outcome;
         if (data.success && data.integrations && data.automation) {
           setLoadError(null);
           setIntegrations(data.integrations);
           setAutomation(data.automation);
+          setReadiness(data.readiness || null);
+          setIsProduction(Boolean(data.is_production));
           setAccountsCount(data.accounts_count ?? 0);
         } else {
           setLoadError(data.error || 'Failed to load integration settings.');
         }
-      })
-      .catch((err) => {
-        console.error('Failed to load settings:', err);
-        if (active) setLoadError('Unable to reach settings API.');
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -103,31 +118,16 @@ function SettingsContent() {
   };
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh] text-zinc-400 gap-2 text-xs">
-        <RefreshCw className="w-5 h-5 animate-spin text-rose-500" />
-        <span>Loading integrations & settings...</span>
-      </div>
-    );
+    return <PageLoadingSkeleton label="Loading integrations & settings..." />;
   }
 
   if (!integrations || !automation) {
     return (
-      <div className="p-4 sm:p-8 max-w-3xl mx-auto">
-        <div className="p-6 rounded-2xl bg-zinc-900 border border-rose-500/30 text-xs text-rose-200 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2.5">
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-            <span>{loadError || 'Settings are temporarily unavailable.'}</span>
-          </div>
-          <button
-            type="button"
-            onClick={fetchData}
-            className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold"
-          >
-            Retry
-          </button>
-        </div>
-      </div>
+      <PageErrorBanner
+        message={loadError || 'Settings are temporarily unavailable.'}
+        onRetry={fetchData}
+        retrying={retrying}
+      />
     );
   }
 
@@ -163,6 +163,8 @@ function SettingsContent() {
       <IntegrationsPanel
         integrations={integrations}
         automation={automation}
+        readiness={readiness || undefined}
+        isProduction={isProduction}
         accountsCount={accountsCount}
         oauthBanner={activeOAuthBanner}
         onDismissOAuthBanner={handleDismissOAuthBanner}

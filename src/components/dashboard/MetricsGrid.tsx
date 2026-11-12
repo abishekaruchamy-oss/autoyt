@@ -3,7 +3,6 @@
 import React from 'react';
 import Link from 'next/link';
 import {
-  Users,
   Film,
   UploadCloud,
   AlertTriangle,
@@ -97,16 +96,24 @@ export function MetricsGrid({ metrics }: MetricsGridProps) {
             <Film className="w-4 h-4" />
           </div>
         </div>
-        <div className="mt-4 flex items-baseline justify-between">
+        <div className="mt-4 flex items-baseline justify-between gap-2">
           <div>
             <span className="text-3xl font-bold tracking-tight text-white">
               {metrics.total_reels_detected}
             </span>
-            <span className="text-xs text-emerald-400 ml-2 font-medium">+2 today</span>
+            <span
+              className={`text-xs ml-2 font-medium ${
+                metrics.reels_detected_today > 0 ? 'text-emerald-400' : 'text-zinc-400'
+              }`}
+            >
+              {metrics.reels_detected_today > 0
+                ? `+${metrics.reels_detected_today} today`
+                : '0 today'}
+            </span>
           </div>
           <Link
             href="/uploads"
-            className="text-xs text-purple-400 hover:text-purple-300 font-medium flex items-center gap-0.5"
+            className="text-xs text-purple-400 hover:text-purple-300 font-medium flex items-center gap-0.5 shrink-0"
           >
             History <ArrowUpRight className="w-3.5 h-3.5" />
           </Link>
@@ -123,16 +130,35 @@ export function MetricsGrid({ metrics }: MetricsGridProps) {
             <UploadCloud className="w-4 h-4" />
           </div>
         </div>
-        <div className="mt-4 flex items-baseline justify-between">
+        <div className="mt-4 flex items-baseline justify-between gap-2">
           <div>
             <span className="text-3xl font-bold tracking-tight text-white">
               {metrics.total_videos_uploaded}
             </span>
-            <span className="text-xs text-zinc-400 ml-2">Published</span>
+            <span className="text-xs text-zinc-400 ml-2">
+              {metrics.in_progress_uploads > 0 ? `${metrics.in_progress_uploads} active` : 'Published'}
+            </span>
           </div>
-          <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 font-semibold border border-emerald-500/20">
-            96% Success
-          </span>
+          {metrics.success_rate === null ? (
+            <span
+              title="No completed or failed uploads recorded yet"
+              className="text-xs px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 font-semibold border border-zinc-700 shrink-0"
+            >
+              N/A
+            </span>
+          ) : (
+            <span
+              className={`text-xs px-2 py-0.5 rounded-full font-semibold border shrink-0 ${
+                metrics.success_rate >= 80
+                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                  : metrics.success_rate >= 50
+                    ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                    : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+              }`}
+            >
+              {metrics.success_rate}% Success
+            </span>
+          )}
         </div>
       </div>
 
@@ -146,17 +172,23 @@ export function MetricsGrid({ metrics }: MetricsGridProps) {
             <AlertTriangle className="w-4 h-4" />
           </div>
         </div>
-        <div className="mt-4 flex items-baseline justify-between">
+        <div className="mt-4 flex items-baseline justify-between gap-2">
           <div>
-            <span className="text-3xl font-bold tracking-tight text-rose-400">
+            <span
+              className={`text-3xl font-bold tracking-tight ${
+                metrics.failed_uploads > 0 ? 'text-rose-400' : 'text-white'
+              }`}
+            >
               {metrics.failed_uploads}
             </span>
-            <span className="text-xs text-zinc-400 ml-2">Needs attention</span>
+            <span className="text-xs text-zinc-400 ml-2">
+              {metrics.failed_uploads > 0 ? 'Needs attention' : 'Healthy queue'}
+            </span>
           </div>
           {metrics.failed_uploads > 0 && (
             <Link
               href="/uploads?status=FAILED"
-              className="text-xs text-rose-400 hover:underline font-medium flex items-center gap-0.5"
+              className="text-xs text-rose-400 hover:underline font-medium flex items-center gap-0.5 shrink-0"
             >
               Retry <ArrowUpRight className="w-3.5 h-3.5" />
             </Link>
@@ -175,21 +207,43 @@ export function MetricsGrid({ metrics }: MetricsGridProps) {
           </div>
         </div>
         <div className="mt-3">
-          <div className="flex justify-between text-xs mb-1.5">
-            <span className="text-zinc-300 font-semibold">
-              {metrics.storage.used_formatted} of {metrics.storage.total_formatted}
-            </span>
-            <span className="text-zinc-400">{metrics.storage.percentage}% used</span>
+          <div className="flex justify-between text-xs mb-1.5 gap-2">
+            {!metrics.storage.connected ? (
+              <>
+                <span className="text-zinc-400 font-semibold">N/A</span>
+                <span className="text-zinc-500">Disconnected</span>
+              </>
+            ) : metrics.storage.available && metrics.storage.percentage !== null ? (
+              <>
+                <span className="text-zinc-300 font-semibold">
+                  {metrics.storage.used_formatted} of {metrics.storage.total_formatted}
+                </span>
+                <span className="text-zinc-400">{metrics.storage.percentage}% used</span>
+              </>
+            ) : (
+              <>
+                <span className="text-zinc-300 font-semibold">Quota N/A</span>
+                <span className="text-emerald-400 font-medium">Connected</span>
+              </>
+            )}
           </div>
           {/* Progress Bar */}
           <div className="w-full h-2 rounded-full bg-zinc-800 overflow-hidden">
             <div
               className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-500"
-              style={{ width: `${Math.min(metrics.storage.percentage, 100)}%` }}
+              style={{
+                width: `${
+                  metrics.storage.connected && metrics.storage.percentage !== null
+                    ? Math.min(metrics.storage.percentage, 100)
+                    : 0
+                }%`,
+              }}
             />
           </div>
-          <span className="text-[11px] text-zinc-500 mt-2 block truncate">
-            Target: &quot;{metrics.storage.folder_name}&quot; ({metrics.storage.reels_stored} videos stored)
+          <span className="text-[11px] text-zinc-400 mt-2 block truncate">
+            {!metrics.storage.connected
+              ? `Target: "${metrics.storage.folder_name}" • Stored videos: N/A`
+              : `Target: "${metrics.storage.folder_name}" (${metrics.storage.reels_stored ?? 0} videos stored)`}
           </span>
         </div>
       </div>

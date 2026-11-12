@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdminApi } from '@/lib/auth';
 import { NO_STORE_HEADERS, sanitizeAccountForApi, sanitizeErrorMessage } from '@/lib/security';
-import { Repository } from '@/server/db/repository';
+import { PipelineService } from '@/server/services/pipelineService';
 
 export async function GET(request: NextRequest) {
   const authError = requireAdminApi(request);
   if (authError) return authError;
 
   try {
-    const metrics = await Repository.getDashboardMetrics();
+    const metrics = await PipelineService.getEnrichedDashboardMetrics();
     return NextResponse.json(
       {
         success: true,

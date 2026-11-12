@@ -26,7 +26,7 @@ export async function GET() {
             : 'N/A',
         },
         database: {
-          mode: process.env.DATABASE_URL ? 'PostgreSQL' : 'Persistent Fallback / D1',
+          mode: Repository.isD1Active() ? 'Cloudflare D1 (Bound)' : 'Local Development Store',
           connected: true,
         },
         monitoring: {
