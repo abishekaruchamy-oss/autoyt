@@ -10,7 +10,9 @@ import { NO_STORE_HEADERS, sanitizeErrorMessage } from '@/lib/security';
 import { Repository } from '@/server/db/repository';
 import {
   exchangeCodeForTokens,
-  saveGoogleCredentials,
+  fetchGoogleUserProfile,
+  fetchYouTubeChannelDetails,
+  saveGoogleServiceCredentials,
 } from '@/server/services/googleAuthService';
 
 export async function GET(request: NextRequest) {
@@ -54,8 +56,8 @@ export async function GET(request: NextRequest) {
   }
 
   // 2. Validate and atomically consume state in durable D1 store (prevents replay attacks)
-  const isValidState = state ? await Repository.validateAndConsumeOAuthState(state) : false;
-  if (!isValidState) {
+  const stateRecord = state ? await Repository.consumeOAuthStateRecord(state) : null;
+  if (!stateRecord || !stateRecord.valid) {
     console.warn('Google OAuth durable state expired or already consumed');
     return redirectWithClearedState('/settings?error=expired_or_invalid_oauth_state');
   }
@@ -63,13 +65,48 @@ export async function GET(request: NextRequest) {
   const redirectUri =
     process.env.GOOGLE_REDIRECT_URI || `${request.nextUrl.origin}/api/auth/google/callback`;
 
+  // Determine service strictly from validated durable state
+  const isYouTube = stateRecord.provider === 'google_youtube';
+
   try {
     const tokens = await exchangeCodeForTokens(code, redirectUri);
-    const details = await saveGoogleCredentials(tokens);
 
-    return redirectWithClearedState(
-      `/settings?success=google_connected&account=${encodeURIComponent(details.email)}`
-    );
+    if (isYouTube) {
+      // YouTube OAuth Flow: Retrieve channel details using the YouTube token
+      const channelProfile = await fetchYouTubeChannelDetails(tokens.access_token);
+
+      if (!channelProfile.youtubeChannel?.id) {
+        console.warn('No YouTube channel found on authorized Google account.');
+        await saveGoogleServiceCredentials('youtube', tokens, {
+          email: channelProfile.email,
+        });
+        return redirectWithClearedState(
+          `/settings?warning=youtube_channel_not_found&account=${encodeURIComponent(channelProfile.email)}`
+        );
+      }
+
+      await saveGoogleServiceCredentials('youtube', tokens, {
+        email: channelProfile.email,
+        channelId: channelProfile.youtubeChannel.id,
+        channelTitle: channelProfile.youtubeChannel.title,
+      });
+
+      return redirectWithClearedState(
+        `/settings?success=youtube_connected&account=${encodeURIComponent(
+          channelProfile.youtubeChannel.title || channelProfile.email
+        )}`
+      );
+    } else {
+      // Google Drive OAuth Flow: Retrieve Google account identity only without YouTube calls
+      const userProfile = await fetchGoogleUserProfile(tokens.access_token);
+      await saveGoogleServiceCredentials('drive', tokens, {
+        email: userProfile.email,
+      });
+
+      return redirectWithClearedState(
+        `/settings?success=google_drive_connected&account=${encodeURIComponent(userProfile.email)}`
+      );
+    }
   } catch (err) {
     const safeError = sanitizeErrorMessage(err, 'Google OAuth callback failed.');
     console.error('Google OAuth callback error:', safeError);

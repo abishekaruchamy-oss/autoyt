@@ -3,7 +3,6 @@ import {
   StandardPublicWebAdapter,
   PermittedSandboxAdapter,
   ReelDeduplicationStore,
-  formatCaptionForYouTube,
 } from '../monitoring/adapter';
 import {
   InstagramBusinessDiscoveryAdapter,
@@ -11,7 +10,12 @@ import {
 } from '../monitoring/businessDiscovery';
 import { GoogleDriveService } from './googleDriveService';
 import { YouTubeService } from './youtubeService';
-import { getValidAccessToken, isGoogleConnected } from './googleAuthService';
+import {
+  getValidDriveAccessToken,
+  getValidYouTubeAccessToken,
+  isDriveConnected,
+  isYouTubeConnected,
+} from './googleAuthService';
 import {
   MonitoredProfile,
   UploadJob,
@@ -136,14 +140,25 @@ export class PipelineService {
         return result;
       }
 
-      // Check Google connection
-      const googleConnected = await isGoogleConnected();
-      let accessToken: string | null = null;
-      if (googleConnected) {
+      // Check Google connections (independent Drive and YouTube)
+      const [driveConnected, youtubeConnected] = await Promise.all([
+        isDriveConnected(),
+        isYouTubeConnected(),
+      ]);
+      let driveToken: string | null = null;
+      let youtubeToken: string | null = null;
+      if (driveConnected) {
         try {
-          accessToken = await getValidAccessToken();
+          driveToken = await getValidDriveAccessToken();
         } catch (err) {
-          result.details.push(`Google token retrieval note: ${(err as Error).message}`);
+          result.details.push(`Google Drive token retrieval note: ${(err as Error).message}`);
+        }
+      }
+      if (youtubeConnected) {
+        try {
+          youtubeToken = await getValidYouTubeAccessToken();
+        } catch (err) {
+          result.details.push(`YouTube token retrieval note: ${(err as Error).message}`);
         }
       }
 
@@ -194,10 +209,11 @@ export class PipelineService {
 
           result.jobsProcessed += 1;
 
-          // If video source is available and Google is connected, enforce daily upload cap before live upload
+          // If video source is available and both services are connected, enforce daily upload cap before live upload
           if (
             reel.video_source_url &&
-            accessToken &&
+            driveToken &&
+            youtubeToken &&
             !options?.sandbox &&
             readiness.daily_uploads_used + uploadsThisRun >= automation.max_uploads_per_day
           ) {
@@ -209,13 +225,14 @@ export class PipelineService {
             continue;
           }
 
-          if (reel.video_source_url && accessToken) {
+          if (reel.video_source_url && driveToken && youtubeToken) {
             try {
               await this.executeJobUpload(
                 job.id,
                 reel,
                 profile.username,
-                accessToken,
+                driveToken,
+                youtubeToken,
                 automation.drive_folder_name,
                 automation.default_visibility || 'private'
               );
@@ -233,11 +250,16 @@ export class PipelineService {
             });
             result.details.push(`Job ${job.id} metadata archived. Video binary requires authorized access.`);
           } else {
+            const missing = !driveToken && !youtubeToken
+              ? 'Google Drive & YouTube accounts'
+              : !driveToken
+              ? 'Google Drive account'
+              : 'YouTube channel';
             await Repository.updateUploadJob(job.id, {
               status: 'DETECTED',
-              error_details: 'Google OAuth account not connected. Connect in Settings to enable automated uploads.',
+              error_details: `${missing} not connected. Connect in Settings to enable automated uploads.`,
             });
-            result.details.push(`Job ${job.id} queued. Awaiting Google account authorization.`);
+            result.details.push(`Job ${job.id} queued. Awaiting ${missing} authorization.`);
           }
         }
       }
@@ -275,7 +297,8 @@ export class PipelineService {
     jobId: string,
     reel: DiscoveredReel,
     username: string,
-    accessToken: string,
+    driveToken: string,
+    youtubeToken: string,
     driveFolderName: string,
     defaultVisibility: 'public' | 'unlisted' | 'private'
   ): Promise<UploadJob> {
@@ -286,14 +309,14 @@ export class PipelineService {
     // Step 1: Downloading & Google Drive Archival
     await Repository.updateUploadJob(jobId, { status: 'DOWNLOADING' });
 
-    const folderId = await GoogleDriveService.getOrCreateFolder(driveFolderName, accessToken);
+    const folderId = await GoogleDriveService.getOrCreateFolder(driveFolderName, driveToken);
     const driveFileName = `reel_${reel.reel_id}_${username}.mp4`;
 
     const driveResult = await GoogleDriveService.streamVideoToDrive(
       reel.video_source_url,
       driveFileName,
       folderId,
-      accessToken
+      driveToken
     );
 
     await Repository.updateUploadJob(jobId, {
@@ -313,7 +336,7 @@ export class PipelineService {
     await Repository.updateUploadJob(jobId, { status: 'UPLOADING_TO_YOUTUBE' });
 
     const driveStreamUrl = GoogleDriveService.getMediaDownloadUrl(driveResult.fileId);
-    const driveHeaders = GoogleDriveService.getAuthHeaders(accessToken);
+    const driveHeaders = GoogleDriveService.getAuthHeaders(driveToken);
 
     try {
       const ytResult = await YouTubeService.streamVideoToYouTube(
@@ -323,7 +346,7 @@ export class PipelineService {
           username,
           privacyStatus: defaultVisibility,
         },
-        accessToken,
+        youtubeToken,
         {
           sourceHeaders: driveHeaders,
           onSessionInitiated: async (sessionUri) => {
@@ -396,7 +419,10 @@ export class PipelineService {
       return job;
     }
 
-    const accessToken = await getValidAccessToken();
+    const [driveToken, youtubeToken] = await Promise.all([
+      getValidDriveAccessToken(),
+      getValidYouTubeAccessToken(),
+    ]);
     const automation = await Repository.getAutomationSettings();
 
     let currentSessionUri: string | undefined = undefined;
@@ -422,7 +448,7 @@ export class PipelineService {
         try {
           let totalBytes = 0;
           if (job.drive_file_id) {
-            const meta = await GoogleDriveService.getFileMetadata(job.drive_file_id, accessToken);
+            const meta = await GoogleDriveService.getFileMetadata(job.drive_file_id, driveToken);
             totalBytes = meta.sizeBytes;
           }
           if (totalBytes > 0) {
@@ -463,19 +489,19 @@ export class PipelineService {
 
       if (job.drive_file_id) {
         videoSourceUrl = GoogleDriveService.getMediaDownloadUrl(job.drive_file_id);
-        sourceHeaders = GoogleDriveService.getAuthHeaders(accessToken);
+        sourceHeaders = GoogleDriveService.getAuthHeaders(driveToken);
       } else {
         // Need to archive to Drive first
         const folderId = await GoogleDriveService.getOrCreateFolder(
           automation.drive_folder_name,
-          accessToken
+          driveToken
         );
         const fileName = `reel_${job.reel_id}_${job.account_username}.mp4`;
         const driveRes = await GoogleDriveService.streamVideoToDrive(
           job.original_reel_url,
           fileName,
           folderId,
-          accessToken
+          driveToken
         );
         await Repository.updateUploadJob(jobId, {
           drive_file_id: driveRes.fileId,
@@ -483,7 +509,7 @@ export class PipelineService {
           status: 'STORED_DRIVE',
         });
         videoSourceUrl = GoogleDriveService.getMediaDownloadUrl(driveRes.fileId);
-        sourceHeaders = GoogleDriveService.getAuthHeaders(accessToken);
+        sourceHeaders = GoogleDriveService.getAuthHeaders(driveToken);
       }
 
       // 3. Upload to YouTube using authenticated Drive stream & session tracking
@@ -496,7 +522,7 @@ export class PipelineService {
           username: job.account_username,
           privacyStatus: automation.default_visibility,
         },
-        accessToken,
+        youtubeToken,
         {
           sourceHeaders,
           sessionUri: currentSessionUri,
@@ -673,22 +699,38 @@ export class PipelineService {
       error_details: null,
     });
 
-    // 7. Check Google Connection
-    const googleConnected = await isGoogleConnected();
-    let accessToken: string | null = null;
-    if (googleConnected) {
+    // 7. Check Google Connections (Drive + YouTube)
+    const [driveConnected, youtubeConnected] = await Promise.all([
+      isDriveConnected(),
+      isYouTubeConnected(),
+    ]);
+    let driveToken: string | null = null;
+    let youtubeToken: string | null = null;
+    if (driveConnected) {
       try {
-        accessToken = await getValidAccessToken();
-      } catch (tokenErr) {
+        driveToken = await getValidDriveAccessToken();
+      } catch {
+        // Token retrieval failed
+      }
+    }
+    if (youtubeConnected) {
+      try {
+        youtubeToken = await getValidYouTubeAccessToken();
+      } catch {
         // Token retrieval failed
       }
     }
 
-    if (!accessToken) {
+    if (!driveToken || !youtubeToken) {
+      const missing = !driveToken && !youtubeToken
+        ? 'Google Drive & YouTube accounts'
+        : !driveToken
+        ? 'Google Drive account'
+        : 'YouTube channel';
       const awaitingJob = await Repository.updateUploadJob(job.id, {
         status: 'MEDIA_AVAILABLE',
         error_details:
-          'Media source ready. Google account not connected - connect in Settings to execute Drive archive and YouTube upload.',
+          `Media source ready. ${missing} not connected - connect in Settings to execute Drive archive and YouTube upload.`,
       });
       return awaitingJob!;
     }
@@ -712,14 +754,14 @@ export class PipelineService {
     try {
       // Step A: Archive to Google Drive
       await Repository.updateUploadJob(job.id, { status: 'ARCHIVING_TO_DRIVE' });
-      const folderId = await GoogleDriveService.getOrCreateFolder(folderName, accessToken);
+      const folderId = await GoogleDriveService.getOrCreateFolder(folderName, driveToken);
       const driveFileName = `reel_${shortcode}_${resolution.username || 'creator'}.mp4`;
 
       const driveResult = await GoogleDriveService.streamVideoToDrive(
         resolution.mediaUrl!,
         driveFileName,
         folderId,
-        accessToken
+        driveToken
       );
 
       await Repository.updateUploadJob(job.id, {
@@ -747,7 +789,7 @@ export class PipelineService {
           username: resolution.username || 'creator',
           privacyStatus: visibility,
         },
-        accessToken,
+        youtubeToken,
         {
           onSessionInitiated: async (sessionUri) => {
             const enc = sessionUri ? encryptToken(sessionUri) : null;
@@ -816,8 +858,8 @@ export class PipelineService {
     }
 
     try {
-      const accessToken = await getValidAccessToken();
-      const quota = await GoogleDriveService.getStorageQuota(accessToken);
+      const driveToken = await getValidDriveAccessToken();
+      const quota = await GoogleDriveService.getStorageQuota(driveToken);
       if (quota.available && quota.usedBytes !== null && quota.totalBytes !== null && quota.totalBytes > 0) {
         return {
           ...metrics,

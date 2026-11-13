@@ -13,6 +13,7 @@ import {
   LogOut,
   Play,
   Cloud,
+  UploadCloud,
 } from 'lucide-react';
 import { Instagram } from '@/components/ui/Icons';
 import { authFetch } from '@/lib/clientAuthFetch';
@@ -53,10 +54,15 @@ export function IntegrationsPanel({
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
-  const isGoogleConnected =
+  const isDriveConnected =
     integrations.google_drive.connected &&
     integrations.google_drive.email !== 'Not connected' &&
     integrations.google_drive.email !== '';
+
+  const isYouTubeConnected =
+    integrations.youtube.connected &&
+    integrations.youtube.channel_title !== 'Not connected' &&
+    integrations.youtube.channel_title !== '';
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -88,10 +94,10 @@ export function IntegrationsPanel({
     }
   };
 
-  const handleDisconnectGoogle = async () => {
-    if (confirm('Disconnect your Google account? Uploads to Google Drive and YouTube Shorts will be paused.')) {
+  const handleDisconnectDrive = async () => {
+    if (confirm('Disconnect your Google Drive account? Video archiving in Drive will be paused.')) {
       try {
-        const res = await authFetch('/api/auth/google/disconnect', { method: 'POST' });
+        const res = await authFetch('/api/auth/google/drive/disconnect', { method: 'POST' });
         const data = (await res.json()) as { success: boolean; error?: string };
         if (data.success) {
           onUpdate();
@@ -99,7 +105,23 @@ export function IntegrationsPanel({
           alert(`Error: ${data.error}`);
         }
       } catch (err) {
-        alert(`Failed to disconnect: ${(err as Error).message}`);
+        alert(`Failed to disconnect Google Drive: ${(err as Error).message}`);
+      }
+    }
+  };
+
+  const handleDisconnectYouTube = async () => {
+    if (confirm('Disconnect your YouTube channel? Automated Shorts publishing will be paused.')) {
+      try {
+        const res = await authFetch('/api/auth/google/youtube/disconnect', { method: 'POST' });
+        const data = (await res.json()) as { success: boolean; error?: string };
+        if (data.success) {
+          onUpdate();
+        } else {
+          alert(`Error: ${data.error}`);
+        }
+      } catch (err) {
+        alert(`Failed to disconnect YouTube channel: ${(err as Error).message}`);
       }
     }
   };
@@ -203,7 +225,7 @@ export function IntegrationsPanel({
       )}
 
       <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* 1. Google Drive & YouTube OAuth Connection Card */}
+        {/* 1. Google Drive Backup */}
         <div className="bg-zinc-900/60 border border-zinc-800 rounded-3xl p-6 flex flex-col justify-between space-y-4">
           <div>
             <div className="flex items-center justify-between mb-3">
@@ -212,11 +234,11 @@ export function IntegrationsPanel({
                   <HardDrive className="w-5 h-5" />
                 </div>
                 <div>
-                  <h4 className="text-base font-bold text-white">Google Drive & YouTube</h4>
-                  <span className="text-xs text-zinc-400">Google Cloud OAuth 2.0</span>
+                  <h4 className="text-base font-bold text-white">Google Drive Backup</h4>
+                  <span className="text-xs text-zinc-400">Cloud Archival Storage</span>
                 </div>
               </div>
-              {isGoogleConnected ? (
+              {isDriveConnected ? (
                 <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
                   <CheckCircle2 className="w-3 h-3" /> Connected
                 </span>
@@ -228,20 +250,22 @@ export function IntegrationsPanel({
             </div>
 
             <p className="text-xs text-zinc-400 leading-relaxed mb-4">
-              Connect your Google Account to enable automatic video archiving in Google Drive and publishing to YouTube Shorts.
+              Connect your Google Drive storage to automatically archive downloaded Instagram Reels before processing.
             </p>
 
             <div className="space-y-3 bg-zinc-950/60 p-4 rounded-2xl border border-zinc-800/80 text-xs">
               <div className="flex justify-between items-center">
                 <span className="text-zinc-400">Google Account:</span>
                 <span className="text-zinc-200 font-semibold font-mono text-[11px]">
-                  {isGoogleConnected ? integrations.google_drive.email : 'Not Authorized'}
+                  {isDriveConnected ? integrations.google_drive.email : 'Not Authorized'}
                 </span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-zinc-400">YouTube Channel:</span>
+                <span className="text-zinc-400">Storage Quota:</span>
                 <span className="text-zinc-200 font-semibold">
-                  {integrations.youtube.connected ? integrations.youtube.channel_title : 'Pending Authorization'}
+                  {isDriveConnected
+                    ? `${integrations.google_drive.quota_used_gb} GB / ${integrations.google_drive.quota_total_gb} GB`
+                    : 'N/A'}
                 </span>
               </div>
               <div>
@@ -251,8 +275,74 @@ export function IntegrationsPanel({
                   value={driveFolder}
                   onChange={(e) => setDriveFolder(e.target.value)}
                   placeholder="Instagram Reels Backup"
-                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-rose-500"
+                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
                 />
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-2">
+            {isDriveConnected ? (
+              <button
+                type="button"
+                onClick={handleDisconnectDrive}
+                className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-zinc-900 hover:bg-red-500/10 text-red-400 border border-zinc-800 hover:border-red-500/30 flex items-center justify-center gap-2 transition-colors"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Disconnect Google Drive</span>
+              </button>
+            ) : (
+              <a
+                href="/api/auth/google/drive/authorize"
+                className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-cyan-600 hover:bg-cyan-500 text-white flex items-center justify-center gap-2 transition-all shadow-md shadow-cyan-600/30"
+              >
+                <LogIn className="w-4 h-4" />
+                <span>Connect Google Drive</span>
+              </a>
+            )}
+          </div>
+        </div>
+
+        {/* 2. YouTube Shorts Publishing */}
+        <div className="bg-zinc-900/60 border border-zinc-800 rounded-3xl p-6 flex flex-col justify-between space-y-4">
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-rose-500/10 text-rose-400 flex items-center justify-center">
+                  <UploadCloud className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-base font-bold text-white">YouTube Shorts Publishing</h4>
+                  <span className="text-xs text-zinc-400">Video Upload & Metadata</span>
+                </div>
+              </div>
+              {isYouTubeConnected ? (
+                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3" /> Connected
+                </span>
+              ) : (
+                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3" /> Authorization Needed
+                </span>
+              )}
+            </div>
+
+            <p className="text-xs text-zinc-400 leading-relaxed mb-4">
+              Authorize YouTube to publish archived videos as Shorts to your connected channel with compliant metadata.
+            </p>
+
+            <div className="space-y-3 bg-zinc-950/60 p-4 rounded-2xl border border-zinc-800/80 text-xs">
+              <div className="flex justify-between items-center">
+                <span className="text-zinc-400">YouTube Channel:</span>
+                <span className="text-zinc-200 font-semibold">
+                  {isYouTubeConnected ? integrations.youtube.channel_title : 'Not Connected'}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-zinc-400">Channel ID:</span>
+                <span className="text-zinc-200 font-semibold font-mono text-[11px]">
+                  {isYouTubeConnected && integrations.youtube.channel_id ? integrations.youtube.channel_id : 'N/A'}
+                </span>
               </div>
               <div>
                 <label className="text-zinc-400 block mb-1.5 font-medium">Default YouTube Visibility:</label>
@@ -270,22 +360,22 @@ export function IntegrationsPanel({
           </div>
 
           <div className="pt-2">
-            {isGoogleConnected ? (
+            {isYouTubeConnected ? (
               <button
                 type="button"
-                onClick={handleDisconnectGoogle}
+                onClick={handleDisconnectYouTube}
                 className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-zinc-900 hover:bg-red-500/10 text-red-400 border border-zinc-800 hover:border-red-500/30 flex items-center justify-center gap-2 transition-colors"
               >
                 <LogOut className="w-3.5 h-3.5" />
-                <span>Disconnect Google Account</span>
+                <span>Disconnect YouTube Channel</span>
               </button>
             ) : (
               <a
-                href="/api/auth/google/authorize"
-                className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center gap-2 transition-all shadow-md shadow-blue-600/30"
+                href="/api/auth/google/youtube/authorize"
+                className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white flex items-center justify-center gap-2 transition-all shadow-md shadow-rose-600/30"
               >
                 <LogIn className="w-4 h-4" />
-                <span>Connect with Google (Drive + YouTube)</span>
+                <span>Connect YouTube Channel</span>
               </a>
             )}
           </div>

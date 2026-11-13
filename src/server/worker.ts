@@ -21,7 +21,19 @@ import {
 } from '../lib/security';
 import { Repository } from './db/repository';
 import { PipelineService } from './services/pipelineService';
-import { getGoogleAuthUrl, exchangeCodeForTokens, saveGoogleCredentials, disconnectGoogle, isGoogleConnected } from './services/googleAuthService';
+import {
+  getGoogleDriveAuthUrl,
+  getYouTubeAuthUrl,
+  exchangeCodeForTokens,
+  saveGoogleServiceCredentials,
+  disconnectGoogle,
+  disconnectGoogleService,
+  isGoogleConnected,
+  isDriveConnected,
+  isYouTubeConnected,
+  fetchGoogleUserProfile,
+  fetchYouTubeChannelDetails,
+} from './services/googleAuthService';
 
 export interface CloudflareEnv {
   DB?: any; // Cloudflare D1 Database binding
@@ -119,6 +131,8 @@ export default {
             integrations: {
               googleDriveConnected: integrations.google_drive.connected,
               youtubeConnected: integrations.youtube.connected,
+              googleDriveTokensAvailable: await isDriveConnected(),
+              youtubeTokensAvailable: await isYouTubeConnected(),
               googleOAuthTokensAvailable: googleConnected,
             },
             automation: {
@@ -189,7 +203,11 @@ export default {
       }
 
       // 5. Google OAuth Endpoints
-      if (path === '/api/auth/google/authorize') {
+      if (
+        path === '/api/auth/google/authorize' ||
+        path === '/api/auth/google/drive/authorize' ||
+        path === '/api/auth/google/youtube/authorize'
+      ) {
         const auth = authorizeAdminRequest(request, { requireCsrf: false });
         if (!auth.ok) {
           return new Response(JSON.stringify({ success: false, error: auth.error }), {
@@ -197,9 +215,14 @@ export default {
             headers: jsonHeaders,
           });
         }
+        const serviceParam = url.searchParams.get('service');
+        const isYouTube = path === '/api/auth/google/youtube/authorize' || serviceParam === 'youtube';
         const redirectUri = process.env.GOOGLE_REDIRECT_URI || `${url.origin}/api/auth/google/callback`;
-        const { url: authUrl, state } = getGoogleAuthUrl(redirectUri);
-        await Repository.saveOAuthState(state, redirectUri);
+        const { url: authUrl, state } = isYouTube
+          ? getYouTubeAuthUrl(redirectUri)
+          : getGoogleDriveAuthUrl(redirectUri);
+        const providerTag = isYouTube ? 'google_youtube' : 'google_drive';
+        await Repository.saveOAuthState(state, redirectUri, 600000, providerTag);
         const headers = new Headers({ Location: authUrl, ...NO_STORE_HEADERS });
         appendOAuthStateCookie(headers, signOAuthStateCookieValue(state, auth.session.jti), request);
         return new Response(null, { status: 302, headers });
@@ -226,23 +249,91 @@ export default {
         if (!verifyOAuthStateCookieValue(cookies[OAUTH_STATE_COOKIE_NAME], state, auth.session.jti)) {
           return clearRedirect(`${url.origin}/settings?error=invalid_csrf_state`);
         }
-        const isValid = state ? await Repository.validateAndConsumeOAuthState(state) : false;
-        if (!isValid) {
+        const stateRecord = state ? await Repository.consumeOAuthStateRecord(state) : null;
+        if (!stateRecord || !stateRecord.valid) {
           return clearRedirect(`${url.origin}/settings?error=expired_or_invalid_oauth_state`);
         }
-        const redirectUri = process.env.GOOGLE_REDIRECT_URI || `${url.origin}/api/auth/google/callback`;
+        const redirectUri = stateRecord.redirectUri || process.env.GOOGLE_REDIRECT_URI || `${url.origin}/api/auth/google/callback`;
         const tokens = await exchangeCodeForTokens(code, redirectUri);
-        const details = await saveGoogleCredentials(tokens);
-        return clearRedirect(
-          `${url.origin}/settings?success=google_connected&account=${encodeURIComponent(details.email)}`
-        );
+        const isYouTube = stateRecord.provider === 'google_youtube';
+
+        if (isYouTube) {
+          const channelProfile = await fetchYouTubeChannelDetails(tokens.access_token);
+          if (!channelProfile.youtubeChannel?.id) {
+            await saveGoogleServiceCredentials('youtube', tokens, {
+              email: channelProfile.email,
+            });
+            return clearRedirect(`${url.origin}/settings?warning=youtube_channel_not_found`);
+          }
+          await saveGoogleServiceCredentials('youtube', tokens, {
+            email: channelProfile.email,
+            channelId: channelProfile.youtubeChannel.id,
+            channelTitle: channelProfile.youtubeChannel.title,
+          });
+          return clearRedirect(
+            `${url.origin}/settings?success=youtube_connected&account=${encodeURIComponent(
+              channelProfile.youtubeChannel.title || channelProfile.email || ''
+            )}`
+          );
+        } else {
+          const userProfile = await fetchGoogleUserProfile(tokens.access_token);
+          await saveGoogleServiceCredentials('drive', tokens, {
+            email: userProfile.email,
+          });
+          return clearRedirect(
+            `${url.origin}/settings?success=google_drive_connected&account=${encodeURIComponent(
+              userProfile.email || ''
+            )}`
+          );
+        }
       }
 
-      if (path === '/api/auth/google/disconnect' && method === 'POST') {
+      if (
+        (path === '/api/auth/google/disconnect' ||
+          path === '/api/auth/google/drive/disconnect' ||
+          path === '/api/auth/google/youtube/disconnect') &&
+        method === 'POST'
+      ) {
         const authFailure = requireWorkerAdmin();
         if (authFailure) return authFailure;
+
+        if (path === '/api/auth/google/drive/disconnect') {
+          await disconnectGoogleService('drive');
+          return new Response(JSON.stringify({ success: true, message: 'Google Drive disconnected' }), {
+            status: 200,
+            headers: jsonHeaders,
+          });
+        }
+
+        if (path === '/api/auth/google/youtube/disconnect') {
+          await disconnectGoogleService('youtube');
+          return new Response(JSON.stringify({ success: true, message: 'YouTube channel disconnected' }), {
+            status: 200,
+            headers: jsonHeaders,
+          });
+        }
+
+        let bodyService: string | undefined;
+        try {
+          const body = (await request.json()) as { service?: string };
+          bodyService = body.service;
+        } catch {
+          // ignore
+        }
+        const service = url.searchParams.get('service') || bodyService;
+        if (service === 'drive' || service === 'youtube') {
+          await disconnectGoogleService(service);
+          return new Response(JSON.stringify({ success: true, message: `Google ${service} disconnected` }), {
+            status: 200,
+            headers: jsonHeaders,
+          });
+        }
+
         await disconnectGoogle();
-        return new Response(JSON.stringify({ success: true, message: 'Google disconnected' }), { status: 200, headers: jsonHeaders });
+        return new Response(JSON.stringify({ success: true, message: 'Google services disconnected' }), {
+          status: 200,
+          headers: jsonHeaders,
+        });
       }
 
       // 6. Settings API

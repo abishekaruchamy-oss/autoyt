@@ -28,6 +28,7 @@ function SettingsContent() {
     success: searchParams.get('success'),
     account: searchParams.get('account'),
     authNotice: searchParams.get('auth_notice'),
+    warning: searchParams.get('warning'),
     error: searchParams.get('error'),
   });
   const activeOAuthBanner =

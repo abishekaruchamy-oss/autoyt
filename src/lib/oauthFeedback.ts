@@ -10,6 +10,7 @@ export interface OAuthQueryFeedbackInput {
   success?: string | null;
   account?: string | null;
   authNotice?: string | null;
+  warning?: string | null;
   error?: string | null;
 }
 
@@ -23,7 +24,41 @@ export function resolveOAuthBannerFeedback(
   const success = input.success?.trim();
   const account = input.account?.trim();
   const authNotice = input.authNotice?.trim();
+  const warning = input.warning?.trim();
   const error = input.error?.trim();
+
+  if (success === 'google_drive_connected') {
+    const safeAccount = account ? sanitizeErrorMessage(account, '') : '';
+    return {
+      variant: 'success',
+      title: 'Google Drive Connected',
+      message: safeAccount
+        ? `Authorized ${safeAccount} for Google Drive video archival storage.`
+        : 'Google account authorized for Google Drive video archival storage.',
+    };
+  }
+
+  if (success === 'youtube_connected') {
+    const safeAccount = account ? sanitizeErrorMessage(account, '') : '';
+    return {
+      variant: 'success',
+      title: 'YouTube Channel Connected',
+      message: safeAccount
+        ? `Authorized YouTube channel ${safeAccount} for automated Shorts publishing.`
+        : 'YouTube channel authorized for automated Shorts publishing.',
+    };
+  }
+
+  if (warning === 'youtube_channel_not_found') {
+    const safeAccount = account ? sanitizeErrorMessage(account, '') : '';
+    return {
+      variant: 'warning',
+      title: 'No YouTube Channel Found',
+      message: safeAccount
+        ? `Google account ${safeAccount} was authorized, but no primary YouTube channel exists for it. Please create a YouTube channel under this account to enable Shorts publishing.`
+        : 'Google account was authorized, but no primary YouTube channel exists for it. Please create a YouTube channel under this account to enable Shorts publishing.',
+    };
+  }
 
   if (success === 'google_connected') {
     const safeAccount = account ? sanitizeErrorMessage(account, '') : '';

@@ -127,6 +127,22 @@ CREATE TABLE IF NOT EXISTS google_credentials (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- 7b. Dedicated Service Credentials for Google Drive & YouTube (Phase 9.7 Separation)
+CREATE TABLE IF NOT EXISTS google_service_credentials (
+    service TEXT PRIMARY KEY CHECK (service IN ('drive', 'youtube')),
+    encrypted_access_token TEXT NOT NULL,
+    encrypted_refresh_token TEXT,
+    expires_at INTEGER NOT NULL,
+    email TEXT NOT NULL,
+    channel_id TEXT,
+    channel_title TEXT,
+    scope TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_google_service_credentials_expires ON google_service_credentials(expires_at);
+
 -- 8. Ephemeral OAuth States (CSRF State Token Validation & Replay Defense)
 CREATE TABLE IF NOT EXISTS oauth_states (
     state TEXT PRIMARY KEY,

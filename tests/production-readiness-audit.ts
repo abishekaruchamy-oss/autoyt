@@ -51,13 +51,17 @@ async function runProductionAudit() {
   process.env.GOOGLE_CLIENT_SECRET = 'test-client-secret-abcde';
 
   const redirectUri = 'http://localhost:3000/api/auth/google/callback';
-  const { url: authUrl, state } = getGoogleAuthUrl(redirectUri);
+  const { url: driveAuthUrl, state: driveState } = getGoogleAuthUrl(redirectUri, 'drive');
+  assert.ok(driveAuthUrl.includes('drive.file'), 'Must include drive.file scope');
+  assert.ok(!driveAuthUrl.includes('youtube.upload'), 'Must NOT bundle youtube.upload in Drive URL');
+  assert.ok(driveAuthUrl.includes(`state=${driveState}`), 'Must include CSRF state parameter');
 
-  assert.ok(authUrl.includes('drive.file'), 'Must include drive.file scope');
-  assert.ok(authUrl.includes('youtube.upload'), 'Must include youtube.upload scope');
-  assert.ok(authUrl.includes('access_type=offline'), 'Must request offline access for refresh token');
-  assert.ok(authUrl.includes('prompt=consent'), 'Must force consent to guarantee refresh token');
-  assert.ok(authUrl.includes(`state=${state}`), 'Must include CSRF state parameter');
+  const { url: ytAuthUrl, state: ytState } = getGoogleAuthUrl(redirectUri, 'youtube');
+  assert.ok(ytAuthUrl.includes('youtube.upload'), 'Must include youtube.upload scope');
+  assert.ok(!ytAuthUrl.includes('drive.file'), 'Must NOT bundle drive.file in YouTube URL');
+  assert.ok(ytAuthUrl.includes('access_type=offline'), 'Must request offline access for refresh token');
+  assert.ok(ytAuthUrl.includes('prompt=consent'), 'Must force consent to guarantee refresh token');
+  assert.ok(ytAuthUrl.includes(`state=${ytState}`), 'Must include CSRF state parameter');
 
   // Verify Encrypted Storage and Freshness
   const mockTokens = {

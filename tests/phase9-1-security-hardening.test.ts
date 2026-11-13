@@ -29,6 +29,8 @@ import { Repository } from '../src/server/db/repository';
 import {
   disconnectGoogle,
   getValidAccessToken,
+  isDriveConnected,
+  isYouTubeConnected,
 } from '../src/server/services/googleAuthService';
 
 import * as sessionRoute from '../src/app/api/auth/session/route';
@@ -450,7 +452,10 @@ async function runPhase91SecurityTests() {
     );
     assert.strictEqual(okCallback.status, 307);
     const okLoc = okCallback.headers.get('location') || '';
-    assert.ok(okLoc.includes('success=google_connected'), `Expected google_connected redirect, got ${okLoc}`);
+    assert.ok(
+      okLoc.includes('success=google_drive_connected') || okLoc.includes('success=google_connected'),
+      `Expected google_drive_connected or google_connected redirect, got ${okLoc}`
+    );
     assert.ok(okLoc.includes('account=operator%40example.com'));
 
     // Replaying the exact same state MUST fail with expired_or_invalid_oauth_state
@@ -591,11 +596,25 @@ async function runPhase91SecurityTests() {
       })
     );
     assert.strictEqual(disconnectRes.status, 200);
-    assert.strictEqual(revokeCalls.length, 1);
-    assert.strictEqual(revokeCalls[0].url, 'https://oauth2.googleapis.com/revoke');
-    assert.strictEqual(revokeCalls[0].method, 'POST');
-    assert.ok(revokeCalls[0].body.includes('1%2F%2FROTATED_REFRESH_TOKEN'));
+    // Disconnecting all services must revoke every active service credential token upstream
+    assert.strictEqual(revokeCalls.length, 2, 'Expected upstream revocation calls for both Drive and YouTube credentials');
+    for (const call of revokeCalls) {
+      assert.strictEqual(call.url, 'https://oauth2.googleapis.com/revoke');
+      assert.strictEqual(call.method, 'POST');
+    }
+    assert.ok(
+      revokeCalls.some((call) => call.body.includes('1%2F%2FROTATED_REFRESH_TOKEN')),
+      'Drive rotated refresh token must be revoked upstream'
+    );
+    assert.ok(
+      revokeCalls.some((call) => call.body.includes('1%2F%2FPRESERVED_REFRESH_TOKEN')),
+      'YouTube refresh token must be revoked upstream'
+    );
     assert.strictEqual(await Repository.getGoogleCredentials(), null);
+    assert.strictEqual(await Repository.getGoogleServiceCredentials('drive'), null);
+    assert.strictEqual(await Repository.getGoogleServiceCredentials('youtube'), null);
+    assert.strictEqual(await isDriveConnected(), false);
+    assert.strictEqual(await isYouTubeConnected(), false);
 
     // Revocation network error must NOT block local credential clearing
     await Repository.saveGoogleCredentials({
@@ -610,6 +629,8 @@ async function runPhase91SecurityTests() {
     };
     await disconnectGoogle();
     assert.strictEqual(await Repository.getGoogleCredentials(), null);
+    assert.strictEqual(await Repository.getGoogleServiceCredentials('drive'), null);
+    assert.strictEqual(await Repository.getGoogleServiceCredentials('youtube'), null);
 
     // Upload job API sanitization: encrypted_youtube_upload_session_uri must NEVER appear in API JSON
     const secretUploadSessionUri = 'https://www.googleapis.com/upload/youtube/v3/videos?upload_id=SECRET_UPLOAD_999';

@@ -161,6 +161,31 @@ export interface ActivityLog {
   created_at: string;
 }
 
+export interface StoredGoogleCredentials {
+  encryptedAccessToken: string;
+  encryptedRefreshToken?: string;
+  expiresAt: number;
+  email: string;
+  channelId?: string;
+  channelTitle?: string;
+  updatedAt?: string;
+}
+
+export type GoogleOAuthService = 'drive' | 'youtube';
+
+export interface StoredGoogleServiceCredentials {
+  service: GoogleOAuthService;
+  encryptedAccessToken: string;
+  encryptedRefreshToken?: string;
+  expiresAt: number;
+  email: string;
+  channelId?: string;
+  channelTitle?: string;
+  scope?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface StorageMetrics {
   connected: boolean;
   available: boolean;

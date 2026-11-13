@@ -168,13 +168,18 @@ Tag a developer friend! #tech #developer #coding #productivity`;
   process.env.GOOGLE_CLIENT_ID = 'test-client-id-12345.apps.googleusercontent.com';
   process.env.GOOGLE_CLIENT_SECRET = 'test-client-secret-abcde';
 
-  const { url: authUrl, state } = getGoogleAuthUrl('http://localhost:3000/api/auth/google/callback');
-  assert.ok(authUrl.startsWith('https://accounts.google.com/o/oauth2/v2/auth'), 'Auth URL must point to Google OAuth endpoint');
-  assert.ok(authUrl.includes('drive.file'), 'Auth URL must request drive.file scope');
-  assert.ok(authUrl.includes('youtube.upload'), 'Auth URL must request youtube.upload scope');
-  assert.ok(authUrl.includes('access_type=offline'), 'Must request offline access for refresh token');
-  assert.ok(authUrl.includes(`state=${state}`), 'Must include CSRF state parameter');
-  console.log('✓ Google OAuth authorization URL properly formed with Drive & YouTube scopes');
+  const { url: driveAuthUrl, state: driveState } = getGoogleAuthUrl('http://localhost:3000/api/auth/google/callback', 'drive');
+  assert.ok(driveAuthUrl.startsWith('https://accounts.google.com/o/oauth2/v2/auth'), 'Auth URL must point to Google OAuth endpoint');
+  assert.ok(driveAuthUrl.includes('drive.file'), 'Drive Auth URL must request drive.file scope');
+  assert.ok(!driveAuthUrl.includes('youtube.upload'), 'Drive Auth URL must NOT bundle youtube scopes');
+  assert.ok(driveAuthUrl.includes(`state=${driveState}`), 'Must include CSRF state parameter');
+
+  const { url: ytAuthUrl, state: ytState } = getGoogleAuthUrl('http://localhost:3000/api/auth/google/callback', 'youtube');
+  assert.ok(ytAuthUrl.includes('youtube.upload'), 'YouTube Auth URL must request youtube.upload scope');
+  assert.ok(!ytAuthUrl.includes('drive.file'), 'YouTube Auth URL must NOT bundle drive scopes');
+  assert.ok(ytAuthUrl.includes('access_type=offline'), 'Must request offline access for refresh token');
+  assert.ok(ytAuthUrl.includes(`state=${ytState}`), 'Must include CSRF state parameter');
+  console.log('✓ Google OAuth authorization URLs properly formed with separated Drive & YouTube scopes');
 
   // Test Credential storage & freshness
   const mockTokens = {

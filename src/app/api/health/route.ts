@@ -1,14 +1,22 @@
 import { NextResponse } from 'next/server';
 import { Repository } from '@/server/db/repository';
-import { isGoogleConnected } from '@/server/services/googleAuthService';
+import {
+  isDriveConnected,
+  isYouTubeConnected,
+  isGoogleConnected,
+} from '@/server/services/googleAuthService';
 import { NO_STORE_HEADERS, sanitizeErrorMessage } from '@/lib/security';
 
 export async function GET() {
   try {
     const automation = await Repository.getAutomationSettings();
     const profiles = await Repository.getMonitoredProfiles();
-    const googleConnected = await isGoogleConnected();
-    const integrations = await Repository.getIntegrations();
+    const [driveConnected, youtubeConnected, googleConnected, integrations] = await Promise.all([
+      isDriveConnected(),
+      isYouTubeConnected(),
+      isGoogleConnected(),
+      Repository.getIntegrations(),
+    ]);
 
     const uptime = process.uptime ? Math.round(process.uptime()) : 0;
     const memory = process.memoryUsage ? process.memoryUsage() : null;
@@ -37,6 +45,8 @@ export async function GET() {
         integrations: {
           googleDriveConnected: integrations.google_drive.connected,
           youtubeConnected: integrations.youtube.connected,
+          googleDriveTokensAvailable: driveConnected,
+          youtubeTokensAvailable: youtubeConnected,
           googleOAuthTokensAvailable: googleConnected,
         },
         automation: {

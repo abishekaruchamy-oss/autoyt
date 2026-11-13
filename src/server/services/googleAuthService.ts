@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { encryptToken, decryptToken } from '@/lib/crypto';
 import { sanitizeErrorMessage } from '@/lib/security';
 import { Repository } from '../db/repository';
+import { GoogleOAuthService, StoredGoogleServiceCredentials } from '@/types';
 
 export interface GoogleTokens {
   access_token: string;
@@ -18,6 +19,25 @@ export interface RefreshedGoogleTokens {
   refreshToken?: string;
 }
 
+export interface GoogleUserProfile {
+  email: string;
+  name: string;
+  picture?: string;
+}
+
+export interface YouTubeChannelProfile {
+  email: string;
+  name: string;
+  picture?: string;
+  youtubeChannel?: {
+    id: string;
+    title: string;
+    customUrl?: string;
+    subscriberCount?: string;
+    thumbnailUrl?: string;
+  };
+}
+
 export interface GoogleAccountDetails {
   email: string;
   name: string;
@@ -31,18 +51,34 @@ export interface GoogleAccountDetails {
   };
 }
 
-const GOOGLE_SCOPES = [
+/**
+ * Independent Scopes for Google Drive and YouTube
+ * Do not include Drive scopes in YouTube requests or YouTube scopes in Drive requests.
+ */
+export const GOOGLE_DRIVE_SCOPES = [
   'https://www.googleapis.com/auth/drive.file',
+  'https://www.googleapis.com/auth/userinfo.email',
+  'https://www.googleapis.com/auth/userinfo.profile',
+].join(' ');
+
+export const YOUTUBE_SCOPES = [
   'https://www.googleapis.com/auth/youtube.upload',
   'https://www.googleapis.com/auth/youtube.readonly',
   'https://www.googleapis.com/auth/userinfo.email',
   'https://www.googleapis.com/auth/userinfo.profile',
 ].join(' ');
 
+// Backward-compatible scope alias (deprecated, prefer GOOGLE_DRIVE_SCOPES or YOUTUBE_SCOPES)
+export const GOOGLE_SCOPES = GOOGLE_DRIVE_SCOPES;
+
 /**
- * Generates the Google OAuth 2.0 authorization URL
+ * Generates an independent Google OAuth 2.0 authorization URL for a specific service.
+ * OMTTS include_granted_scopes to prevent cross-service scope bundling rejection.
  */
-export function getGoogleAuthUrl(redirectUri: string): { url: string; state: string } {
+export function generateGoogleAuthUrl(
+  service: GoogleOAuthService,
+  redirectUri: string
+): { url: string; state: string } {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   if (!clientId) {
     throw new Error('GOOGLE_CLIENT_ID is not configured in environment variables.');
@@ -53,17 +89,44 @@ export function getGoogleAuthUrl(redirectUri: string): { url: string; state: str
   authUrl.searchParams.set('client_id', clientId);
   authUrl.searchParams.set('redirect_uri', redirectUri);
   authUrl.searchParams.set('response_type', 'code');
-  authUrl.searchParams.set('scope', GOOGLE_SCOPES);
+  authUrl.searchParams.set(
+    'scope',
+    service === 'youtube' ? YOUTUBE_SCOPES : GOOGLE_DRIVE_SCOPES
+  );
   authUrl.searchParams.set('access_type', 'offline'); // Requests refresh_token
   authUrl.searchParams.set('prompt', 'consent'); // Forces consent to guarantee refresh_token
-  authUrl.searchParams.set('include_granted_scopes', 'true');
+  // Do NOT set include_granted_scopes to avoid merging unrelated previously granted scopes
   authUrl.searchParams.set('state', state);
 
   return { url: authUrl.toString(), state };
 }
 
+export function getGoogleDriveAuthUrl(redirectUri: string): { url: string; state: string } {
+  return generateGoogleAuthUrl('drive', redirectUri);
+}
+
+export function getYouTubeAuthUrl(redirectUri: string): { url: string; state: string } {
+  return generateGoogleAuthUrl('youtube', redirectUri);
+}
+
 /**
- * Exchanges authorization code for access and refresh tokens
+ * Backward-compatible wrapper for generating Google authorization URL.
+ */
+export function getGoogleAuthUrl(
+  first: GoogleOAuthService | string,
+  second?: GoogleOAuthService | string
+): { url: string; state: string } {
+  if (first === 'youtube' || first === 'drive') {
+    return generateGoogleAuthUrl(first, typeof second === 'string' ? second : '');
+  }
+  if (second === 'youtube' || second === 'drive') {
+    return generateGoogleAuthUrl(second, typeof first === 'string' ? first : '');
+  }
+  return generateGoogleAuthUrl('drive', typeof first === 'string' ? first : '');
+}
+
+/**
+ * Exchanges authorization code for access and refresh tokens.
  */
 export async function exchangeCodeForTokens(
   code: string,
@@ -120,8 +183,7 @@ export async function exchangeCodeForTokens(
 }
 
 /**
- * Refreshes an expired access token using the stored encrypted refresh token,
- * returning Google's `expires_in` lifetime and any rotated `refresh_token`.
+ * Refreshes an expired access token using the stored encrypted refresh token.
  */
 export async function refreshGoogleTokens(
   refreshTokenEncrypted: string
@@ -189,10 +251,10 @@ export async function refreshAccessToken(refreshTokenEncrypted: string): Promise
 }
 
 /**
- * Fetches user profile info and primary YouTube channel details
+ * Fetches Google user profile (email and name) using userinfo endpoint.
+ * Safe to call with either Drive-only or YouTube-only tokens.
  */
-export async function fetchGoogleAccountDetails(accessToken: string): Promise<GoogleAccountDetails> {
-  // 1. Fetch User Info
+export async function fetchGoogleUserProfile(accessToken: string): Promise<GoogleUserProfile> {
   const userRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
@@ -205,13 +267,25 @@ export async function fetchGoogleAccountDetails(accessToken: string): Promise<Go
     picture?: string;
   };
 
-  const details: GoogleAccountDetails = {
+  return {
     email: userData.email || 'unknown@gmail.com',
     name: userData.name || 'Google User',
     picture: userData.picture,
   };
+}
 
-  // 2. Fetch YouTube Channel
+/**
+ * Fetches YouTube channel info using the YouTube Data API.
+ * MUST only be called with a token authorized for YouTube scopes.
+ */
+export async function fetchYouTubeChannelDetails(accessToken: string): Promise<YouTubeChannelProfile> {
+  const user = await fetchGoogleUserProfile(accessToken);
+  const profile: YouTubeChannelProfile = {
+    email: user.email,
+    name: user.name,
+    picture: user.picture,
+  };
+
   try {
     const ytRes = await fetch(
       'https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&mine=true',
@@ -219,6 +293,11 @@ export async function fetchGoogleAccountDetails(accessToken: string): Promise<Go
         headers: { Authorization: `Bearer ${accessToken}` },
       }
     );
+    if (!ytRes.ok) {
+      console.warn(`YouTube channel fetch returned HTTP ${ytRes.status}`);
+      return profile;
+    }
+
     const ytData = (await ytRes.json()) as {
       items?: Array<{
         id: string;
@@ -232,9 +311,10 @@ export async function fetchGoogleAccountDetails(accessToken: string): Promise<Go
         };
       }>;
     };
+
     if (ytData.items && ytData.items.length > 0) {
       const ch = ytData.items[0];
-      details.youtubeChannel = {
+      profile.youtubeChannel = {
         id: ch.id,
         title: ch.snippet.title,
         customUrl: ch.snippet.customUrl,
@@ -246,43 +326,61 @@ export async function fetchGoogleAccountDetails(accessToken: string): Promise<Go
     console.warn('Could not retrieve YouTube channel info:', sanitizeErrorMessage(err));
   }
 
-  return details;
+  return profile;
 }
 
 /**
- * Saves Google credentials and updates integration state
+ * Backward-compatible account fetcher.
  */
-export async function saveGoogleCredentials(tokens: GoogleTokens): Promise<GoogleAccountDetails> {
-  const details = await fetchGoogleAccountDetails(tokens.access_token);
+export async function fetchGoogleAccountDetails(accessToken: string): Promise<GoogleAccountDetails> {
+  return fetchYouTubeChannelDetails(accessToken);
+}
 
-  // Encrypt sensitive tokens at rest; preserve existing encrypted refresh token if omitted on re-consent
+/**
+ * Saves separate Google service credentials (drive or youtube).
+ */
+export async function saveGoogleServiceCredentials(
+  service: GoogleOAuthService,
+  tokens: GoogleTokens,
+  details: {
+    email: string;
+    channelId?: string;
+    channelTitle?: string;
+  }
+): Promise<{ email: string; channelId?: string; channelTitle?: string }> {
   const encryptedAccess = encryptToken(tokens.access_token);
-  const existing = tokens.refresh_token ? null : await Repository.getGoogleCredentials();
+  const existing = tokens.refresh_token
+    ? null
+    : await Repository.getGoogleServiceCredentials(service);
   const encryptedRefresh = tokens.refresh_token
     ? encryptToken(tokens.refresh_token)
     : existing?.encryptedRefreshToken;
   const expiresAt = Date.now() + (tokens.expires_in || 3600) * 1000;
 
-  // Persist encrypted credentials in Repository
-  await Repository.saveGoogleCredentials({
+  const credsRecord: StoredGoogleServiceCredentials = {
+    service,
     encryptedAccessToken: encryptedAccess,
     encryptedRefreshToken: encryptedRefresh,
     expiresAt,
     email: details.email,
-    channelId: details.youtubeChannel?.id,
-    channelTitle: details.youtubeChannel?.title,
+    channelId: details.channelId,
+    channelTitle: details.channelTitle,
+    scope: tokens.scope,
     updatedAt: new Date().toISOString(),
-  });
+  };
 
-  // Log activity
+  await Repository.saveGoogleServiceCredentials(credsRecord);
+
   await Repository.logActivity(
     'SETTINGS_UPDATED',
-    `Google account (${details.email}) authorized for Google Drive & YouTube Shorts`,
+    `Google ${service === 'drive' ? 'Drive' : 'YouTube'} account (${details.email}) authorized`,
     undefined,
     {
+      service,
       email: details.email,
-      youtubeChannel: details.youtubeChannel?.title,
+      channel: details.channelTitle,
       hasRefreshToken: !!tokens.refresh_token,
+      scope: tokens.scope,
     }
   );
 
@@ -290,10 +388,31 @@ export async function saveGoogleCredentials(tokens: GoogleTokens): Promise<Googl
 }
 
 /**
- * Retrieves a valid, unexpired Google access token, automatically refreshing if needed
+ * Backward-compatible credential saver.
  */
-export async function getValidAccessToken(): Promise<string> {
-  const creds = await Repository.getGoogleCredentials();
+export async function saveGoogleCredentials(tokens: GoogleTokens): Promise<GoogleAccountDetails> {
+  const details = await fetchGoogleAccountDetails(tokens.access_token);
+
+  await saveGoogleServiceCredentials('drive', tokens, {
+    email: details.email,
+  });
+
+  if (details.youtubeChannel?.id) {
+    await saveGoogleServiceCredentials('youtube', tokens, {
+      email: details.email,
+      channelId: details.youtubeChannel.id,
+      channelTitle: details.youtubeChannel.title,
+    });
+  }
+
+  return details;
+}
+
+/**
+ * Retrieves a valid Google Drive access token, automatically refreshing if needed.
+ */
+export async function getValidDriveAccessToken(): Promise<string> {
+  const creds = await Repository.getGoogleServiceCredentials('drive');
   if (creds) {
     const EXPIRY_BUFFER_MS = 5 * 60 * 1000;
     const isExpiring = Date.now() > creds.expiresAt - EXPIRY_BUFFER_MS;
@@ -308,8 +427,9 @@ export async function getValidAccessToken(): Promise<string> {
           ? encryptToken(refreshed.refreshToken)
           : creds.encryptedRefreshToken;
 
-        await Repository.saveGoogleCredentials({
+        await Repository.saveGoogleServiceCredentials({
           ...creds,
+          service: 'drive',
           encryptedAccessToken: encryptToken(refreshed.accessToken),
           encryptedRefreshToken,
           expiresAt: Date.now() + refreshed.expiresIn * 1000,
@@ -318,29 +438,176 @@ export async function getValidAccessToken(): Promise<string> {
 
         return refreshed.accessToken;
       } catch (err) {
-        const safeMessage = sanitizeErrorMessage(err, 'Google token refresh failed.');
-        console.warn('Failed to refresh stored Google token:', safeMessage);
+        const safeMessage = sanitizeErrorMessage(err, 'Google Drive token refresh failed.');
+        console.warn('Failed to refresh stored Google Drive token:', safeMessage);
         throw new Error(
-          `Google OAuth reauthorization required: ${safeMessage} Please reconnect your Google account in Settings > Integrations.`
+          `Google Drive OAuth reauthorization required: ${safeMessage} Please reconnect Google Drive in Settings > Integrations.`
         );
       }
     }
 
     if (Date.now() >= creds.expiresAt) {
       throw new Error(
-        'Google OAuth reauthorization required: Stored access token expired and no refresh token is available. Please reconnect your Google account in Settings > Integrations.'
+        'Google Drive OAuth reauthorization required: Stored access token expired and no refresh token is available. Please reconnect Google Drive in Settings > Integrations.'
       );
     }
 
     return decryptToken(creds.encryptedAccessToken);
   }
 
-  // Environment variable fallback (for CI / testing / serverless env)
+  // Fallback to legacy credential ONLY if YouTube service credentials do not exist
+  const ytCreds = await Repository.getGoogleServiceCredentials('youtube');
+  if (!ytCreds) {
+    const legacy = await Repository.getGoogleCredentials();
+    if (legacy) {
+      const EXPIRY_BUFFER_MS = 5 * 60 * 1000;
+      const isExpiring = Date.now() > legacy.expiresAt - EXPIRY_BUFFER_MS;
+      if (!isExpiring) {
+        return decryptToken(legacy.encryptedAccessToken);
+      }
+      if (legacy.encryptedRefreshToken) {
+        try {
+          const refreshed = await refreshGoogleTokens(legacy.encryptedRefreshToken);
+          await Repository.saveGoogleCredentials({
+            ...legacy,
+            encryptedAccessToken: encryptToken(refreshed.accessToken),
+            expiresAt: Date.now() + refreshed.expiresIn * 1000,
+          });
+          return refreshed.accessToken;
+        } catch (err) {
+          const safeMessage = sanitizeErrorMessage(err, 'Token refresh failed.');
+          console.warn('Failed to refresh stored legacy token:', safeMessage);
+          throw new Error(
+            `Google OAuth reauthorization required: ${safeMessage} Please reconnect in Settings > Integrations.`
+          );
+        }
+      }
+      if (Date.now() >= legacy.expiresAt) {
+        throw new Error(
+          'Google Drive OAuth reauthorization required: Stored access token expired. Please reconnect in Settings > Integrations.'
+        );
+      }
+      return decryptToken(legacy.encryptedAccessToken);
+    }
+  }
+
   if (process.env.GOOGLE_ACCESS_TOKEN) {
     return process.env.GOOGLE_ACCESS_TOKEN;
   }
 
-  throw new Error('Google account is not connected. Please authorize via Settings > Integrations.');
+  throw new Error('Google Drive account is not connected. Please authorize via Settings > Integrations.');
+}
+
+/**
+ * Retrieves a valid YouTube access token, automatically refreshing if needed.
+ */
+export async function getValidYouTubeAccessToken(): Promise<string> {
+  const creds = await Repository.getGoogleServiceCredentials('youtube');
+  if (creds) {
+    const EXPIRY_BUFFER_MS = 5 * 60 * 1000;
+    const isExpiring = Date.now() > creds.expiresAt - EXPIRY_BUFFER_MS;
+    if (!isExpiring) {
+      return decryptToken(creds.encryptedAccessToken);
+    }
+
+    if (creds.encryptedRefreshToken) {
+      try {
+        const refreshed = await refreshGoogleTokens(creds.encryptedRefreshToken);
+        const encryptedRefreshToken = refreshed.refreshToken
+          ? encryptToken(refreshed.refreshToken)
+          : creds.encryptedRefreshToken;
+
+        await Repository.saveGoogleServiceCredentials({
+          ...creds,
+          service: 'youtube',
+          encryptedAccessToken: encryptToken(refreshed.accessToken),
+          encryptedRefreshToken,
+          expiresAt: Date.now() + refreshed.expiresIn * 1000,
+          updatedAt: new Date().toISOString(),
+        });
+
+        return refreshed.accessToken;
+      } catch (err) {
+        const safeMessage = sanitizeErrorMessage(err, 'YouTube token refresh failed.');
+        console.warn('Failed to refresh stored YouTube token:', safeMessage);
+        throw new Error(
+          `YouTube OAuth reauthorization required: ${safeMessage} Please reconnect YouTube in Settings > Integrations.`
+        );
+      }
+    }
+
+    if (Date.now() >= creds.expiresAt) {
+      throw new Error(
+        'YouTube OAuth reauthorization required: Stored access token expired and no refresh token is available. Please reconnect YouTube in Settings > Integrations.'
+      );
+    }
+
+    return decryptToken(creds.encryptedAccessToken);
+  }
+
+  // Fallback to legacy credential ONLY if Drive service credentials do not exist
+  const driveCreds = await Repository.getGoogleServiceCredentials('drive');
+  if (!driveCreds) {
+    const legacy = await Repository.getGoogleCredentials();
+    if (legacy && (legacy.channelTitle || legacy.email)) {
+      const EXPIRY_BUFFER_MS = 5 * 60 * 1000;
+      const isExpiring = Date.now() > legacy.expiresAt - EXPIRY_BUFFER_MS;
+      if (!isExpiring) {
+        return decryptToken(legacy.encryptedAccessToken);
+      }
+      if (legacy.encryptedRefreshToken) {
+        try {
+          const refreshed = await refreshGoogleTokens(legacy.encryptedRefreshToken);
+          await Repository.saveGoogleCredentials({
+            ...legacy,
+            encryptedAccessToken: encryptToken(refreshed.accessToken),
+            expiresAt: Date.now() + refreshed.expiresIn * 1000,
+          });
+          return refreshed.accessToken;
+        } catch (err) {
+          const safeMessage = sanitizeErrorMessage(err, 'Token refresh failed.');
+          console.warn('Failed to refresh stored legacy token:', safeMessage);
+          throw new Error(
+            `Google OAuth reauthorization required: ${safeMessage} Please reconnect in Settings > Integrations.`
+          );
+        }
+      }
+      if (Date.now() >= legacy.expiresAt) {
+        throw new Error(
+          'YouTube OAuth reauthorization required: Stored access token expired. Please reconnect in Settings > Integrations.'
+        );
+      }
+      return decryptToken(legacy.encryptedAccessToken);
+    }
+  }
+
+  if (process.env.GOOGLE_ACCESS_TOKEN) {
+    return process.env.GOOGLE_ACCESS_TOKEN;
+  }
+
+  throw new Error('YouTube channel is not connected. Please authorize via Settings > Integrations.');
+}
+
+/**
+ * Backward-compatible generic access token getter.
+ */
+export async function getValidAccessToken(): Promise<string> {
+  const driveCreds = await Repository.getGoogleServiceCredentials('drive');
+  const ytCreds = await Repository.getGoogleServiceCredentials('youtube');
+  if (driveCreds) {
+    return getValidDriveAccessToken();
+  }
+  if (ytCreds) {
+    return getValidYouTubeAccessToken();
+  }
+  try {
+    return await getValidDriveAccessToken();
+  } catch (err) {
+    if (err instanceof Error && /reauthorization required/i.test(err.message)) {
+      throw err;
+    }
+    return await getValidYouTubeAccessToken();
+  }
 }
 
 async function revokeGoogleTokenBestEffort(rawToken: string): Promise<void> {
@@ -363,41 +630,88 @@ async function revokeGoogleTokenBestEffort(rawToken: string): Promise<void> {
   }
 }
 
-/**
- * Checks if a Google account is currently connected
- */
+export async function isDriveConnected(): Promise<boolean> {
+  const creds = await Repository.getGoogleServiceCredentials('drive');
+  if (creds) return true;
+  const ytCreds = await Repository.getGoogleServiceCredentials('youtube');
+  if (!ytCreds) {
+    const legacy = await Repository.getGoogleCredentials();
+    if (legacy && legacy.email) return true;
+  }
+  return Boolean(process.env.GOOGLE_ACCESS_TOKEN);
+}
+
+export async function isYouTubeConnected(): Promise<boolean> {
+  const creds = await Repository.getGoogleServiceCredentials('youtube');
+  if (creds && creds.channelId) return true;
+  const driveCreds = await Repository.getGoogleServiceCredentials('drive');
+  if (!driveCreds) {
+    const legacy = await Repository.getGoogleCredentials();
+    if (legacy && (legacy.channelTitle || legacy.email)) return true;
+  }
+  return Boolean(process.env.GOOGLE_ACCESS_TOKEN);
+}
+
 export async function isGoogleConnected(): Promise<boolean> {
-  const creds = await Repository.getGoogleCredentials();
-  return !!(creds || process.env.GOOGLE_ACCESS_TOKEN);
+  return (await isDriveConnected()) || (await isYouTubeConnected());
 }
 
 /**
- * Disconnects the Google integration, best-effort revoking upstream Google OAuth
- * credentials and always clearing encrypted credentials from durable storage.
+ * Disconnects a single Google service (drive or youtube), attempting best-effort token revocation
+ * on only that service's token, while keeping the other service's credentials completely intact.
  */
-export async function disconnectGoogle(): Promise<void> {
-  const creds = await Repository.getGoogleCredentials();
-
+export async function disconnectGoogleService(service: GoogleOAuthService): Promise<void> {
+  const creds = await Repository.getGoogleServiceCredentials(service);
   try {
-    const encryptedCandidate = creds?.encryptedRefreshToken || creds?.encryptedAccessToken;
-    if (encryptedCandidate) {
+    const candidate = creds?.encryptedRefreshToken || creds?.encryptedAccessToken;
+    if (candidate) {
       try {
-        const rawToken = decryptToken(encryptedCandidate);
+        const rawToken = decryptToken(candidate);
         if (rawToken) {
           await revokeGoogleTokenBestEffort(rawToken);
         }
       } catch (err) {
-        console.warn(
-          'Skipping upstream Google token revocation (could not decrypt stored token):',
-          sanitizeErrorMessage(err)
-        );
+        console.warn(`Skipping token revocation for ${service}:`, sanitizeErrorMessage(err));
       }
     }
   } finally {
-    await Repository.clearGoogleCredentials();
+    await Repository.clearGoogleServiceCredentials(service);
     await Repository.logActivity(
       'SETTINGS_UPDATED',
-      'Google account disconnected from Google Drive and YouTube Shorts'
+      `Google ${service === 'drive' ? 'Drive' : 'YouTube'} account disconnected`
     );
   }
+}
+
+/**
+ * Backward-compatible disconnect function (disconnects both services).
+ */
+export async function disconnectGoogle(): Promise<void> {
+  const [driveCreds, ytCreds, legacyCreds] = await Promise.all([
+    Repository.getGoogleServiceCredentials('drive'),
+    Repository.getGoogleServiceCredentials('youtube'),
+    Repository.getGoogleCredentials(),
+  ]);
+
+  const tokensToRevoke = new Set<string>();
+  for (const c of [driveCreds, ytCreds, legacyCreds]) {
+    const candidate = c?.encryptedRefreshToken || c?.encryptedAccessToken;
+    if (candidate) {
+      try {
+        const raw = decryptToken(candidate);
+        if (raw) tokensToRevoke.add(raw);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  for (const raw of tokensToRevoke) {
+    await revokeGoogleTokenBestEffort(raw);
+  }
+
+  await Repository.clearGoogleServiceCredentials('drive');
+  await Repository.clearGoogleServiceCredentials('youtube');
+  await Repository.clearGoogleCredentials();
+  await Repository.logActivity('SETTINGS_UPDATED', 'All Google services disconnected');
 }

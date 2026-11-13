@@ -9,6 +9,8 @@ import {
   ExecutionReadiness,
   JobStatus,
   ActivityEventType,
+  GoogleOAuthService,
+  StoredGoogleServiceCredentials,
 } from '@/types';
 import {
   createInitialMonitoredProfiles,
@@ -56,6 +58,7 @@ class DataStore {
   activityLogs: ActivityLog[] = createInitialActivityLogs();
   integrations: IntegrationStatus = createInitialIntegrations();
   googleCredentials: StoredGoogleCredentials | null = null;
+  googleServiceCredentials: Map<'drive' | 'youtube', StoredGoogleServiceCredentials> = new Map();
   oauthStates: Map<string, OAuthStateRecord> = new Map();
   recordedReels: Set<string> = new Set();
 
@@ -67,6 +70,7 @@ class DataStore {
     this.activityLogs = createInitialActivityLogs();
     this.integrations = createInitialIntegrations();
     this.googleCredentials = null;
+    this.googleServiceCredentials.clear();
     this.oauthStates.clear();
     this.recordedReels.clear();
   }
@@ -1449,18 +1453,67 @@ export class Repository {
       }
 
       // Check if real Google credentials are in database
-      const creds = await this.getGoogleCredentials();
-      if (creds) {
+      const [driveCreds, youtubeCreds, legacyCreds] = await Promise.all([
+        this.getGoogleServiceCredentials('drive'),
+        this.getGoogleServiceCredentials('youtube'),
+        this.getGoogleCredentials(),
+      ]);
+
+      if (driveCreds) {
         base.google_drive.connected = true;
-        base.google_drive.email = creds.email;
-        if (creds.channelTitle) {
-          base.youtube.connected = true;
-          base.youtube.channel_title = creds.channelTitle;
-          base.youtube.channel_id = creds.channelId || 'None';
-        }
+        base.google_drive.email = driveCreds.email;
+      } else if (!youtubeCreds && legacyCreds) {
+        base.google_drive.connected = true;
+        base.google_drive.email = legacyCreds.email;
+      } else {
+        base.google_drive.connected = false;
+        base.google_drive.email = 'Not connected';
+      }
+
+      if (youtubeCreds && youtubeCreds.channelId) {
+        base.youtube.connected = true;
+        base.youtube.channel_title = youtubeCreds.channelTitle || 'Connected Channel';
+        base.youtube.channel_id = youtubeCreds.channelId;
+      } else if (!driveCreds && legacyCreds && legacyCreds.channelTitle) {
+        base.youtube.connected = true;
+        base.youtube.channel_title = legacyCreds.channelTitle;
+        base.youtube.channel_id = legacyCreds.channelId || 'None';
+      } else {
+        base.youtube.connected = false;
+        base.youtube.channel_title = 'Not connected';
+        base.youtube.channel_id = 'None';
       }
 
       return base;
+    }
+
+    const driveCreds = store.googleServiceCredentials.get('drive');
+    const youtubeCreds = store.googleServiceCredentials.get('youtube');
+    const legacyCreds = store.googleCredentials;
+
+    if (driveCreds) {
+      store.integrations.google_drive.connected = true;
+      store.integrations.google_drive.email = driveCreds.email;
+    } else if (!youtubeCreds && legacyCreds) {
+      store.integrations.google_drive.connected = true;
+      store.integrations.google_drive.email = legacyCreds.email;
+    } else {
+      store.integrations.google_drive.connected = false;
+      store.integrations.google_drive.email = 'Not connected';
+    }
+
+    if (youtubeCreds && youtubeCreds.channelId) {
+      store.integrations.youtube.connected = true;
+      store.integrations.youtube.channel_title = youtubeCreds.channelTitle || 'Connected Channel';
+      store.integrations.youtube.channel_id = youtubeCreds.channelId;
+    } else if (!driveCreds && legacyCreds && legacyCreds.channelTitle) {
+      store.integrations.youtube.connected = true;
+      store.integrations.youtube.channel_title = legacyCreds.channelTitle;
+      store.integrations.youtube.channel_id = legacyCreds.channelId || 'None';
+    } else {
+      store.integrations.youtube.connected = false;
+      store.integrations.youtube.channel_title = 'Not connected';
+      store.integrations.youtube.channel_id = 'None';
     }
 
     return store.integrations;
@@ -1495,7 +1548,173 @@ export class Repository {
   }
 
   /**
-   * Persists AES-256-GCM encrypted Google credentials in D1.
+   * Persists AES-256-GCM encrypted Google service credentials (drive or youtube) in D1.
+   */
+  static async saveGoogleServiceCredentials(
+    creds: StoredGoogleServiceCredentials
+  ): Promise<void> {
+    const d1 = getD1Database();
+    if (d1) {
+      const now = new Date().toISOString();
+      await d1
+        .prepare(`
+          INSERT INTO google_service_credentials (
+            service, encrypted_access_token, encrypted_refresh_token,
+            expires_at, email, channel_id, channel_title, scope, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(service) DO UPDATE SET
+            encrypted_access_token = excluded.encrypted_access_token,
+            encrypted_refresh_token = COALESCE(excluded.encrypted_refresh_token, google_service_credentials.encrypted_refresh_token),
+            expires_at = excluded.expires_at,
+            email = excluded.email,
+            channel_id = COALESCE(excluded.channel_id, google_service_credentials.channel_id),
+            channel_title = COALESCE(excluded.channel_title, google_service_credentials.channel_title),
+            scope = COALESCE(excluded.scope, google_service_credentials.scope),
+            updated_at = excluded.updated_at
+        `)
+        .bind(
+          creds.service,
+          creds.encryptedAccessToken,
+          creds.encryptedRefreshToken || null,
+          creds.expiresAt,
+          creds.email,
+          creds.channelId || null,
+          creds.channelTitle || null,
+          creds.scope || null,
+          now
+        )
+        .run();
+
+      if (creds.service === 'drive') {
+        await d1
+          .prepare(`
+            INSERT INTO google_credentials (
+              id, encrypted_access_token, encrypted_refresh_token,
+              expires_at, email, channel_id, channel_title, updated_at
+            ) VALUES ('default', ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              encrypted_access_token = excluded.encrypted_access_token,
+              encrypted_refresh_token = COALESCE(excluded.encrypted_refresh_token, google_credentials.encrypted_refresh_token),
+              expires_at = excluded.expires_at,
+              email = excluded.email,
+              updated_at = excluded.updated_at
+          `)
+          .bind(
+            creds.encryptedAccessToken,
+            creds.encryptedRefreshToken || null,
+            creds.expiresAt,
+            creds.email,
+            creds.channelId || null,
+            creds.channelTitle || null,
+            now
+          )
+          .run();
+
+        await this.updateIntegration('google_drive', {
+          connected: true,
+          email: creds.email,
+        } as any);
+      } else if (creds.service === 'youtube') {
+        const isConnected = Boolean(creds.channelId);
+        await this.updateIntegration('youtube', {
+          connected: isConnected,
+          channel_title: creds.channelTitle || (isConnected ? 'Connected Channel' : 'No Channel Found'),
+          channel_id: creds.channelId || 'None',
+        } as any);
+      }
+      return;
+    }
+
+    store.googleServiceCredentials.set(creds.service, creds);
+    if (creds.service === 'drive') {
+      store.integrations.google_drive.connected = true;
+      store.integrations.google_drive.email = creds.email;
+      store.googleCredentials = {
+        encryptedAccessToken: creds.encryptedAccessToken,
+        encryptedRefreshToken: creds.encryptedRefreshToken,
+        expiresAt: creds.expiresAt,
+        email: creds.email,
+        channelId: creds.channelId,
+        channelTitle: creds.channelTitle,
+        updatedAt: creds.updatedAt || new Date().toISOString(),
+      };
+    } else if (creds.service === 'youtube') {
+      const isConnected = Boolean(creds.channelId);
+      store.integrations.youtube.connected = isConnected;
+      store.integrations.youtube.channel_title =
+        creds.channelTitle || (isConnected ? 'Connected Channel' : 'No Channel Found');
+      store.integrations.youtube.channel_id = creds.channelId || 'None';
+    }
+  }
+
+  /**
+   * Retrieves AES-256-GCM encrypted Google service credentials for 'drive' or 'youtube'.
+   */
+  static async getGoogleServiceCredentials(
+    service: GoogleOAuthService
+  ): Promise<StoredGoogleServiceCredentials | null> {
+    const d1 = getD1Database();
+    if (d1) {
+      const r = await d1
+        .prepare('SELECT * FROM google_service_credentials WHERE service = ?')
+        .bind(service)
+        .first<any>();
+      if (r) {
+        return {
+          service: r.service as GoogleOAuthService,
+          encryptedAccessToken: r.encrypted_access_token,
+          encryptedRefreshToken: r.encrypted_refresh_token || undefined,
+          expiresAt: Number(r.expires_at),
+          email: r.email,
+          channelId: r.channel_id || undefined,
+          channelTitle: r.channel_title || undefined,
+          scope: r.scope || undefined,
+          createdAt: r.created_at,
+          updatedAt: r.updated_at,
+        };
+      }
+      return null;
+    }
+
+    return store.googleServiceCredentials.get(service) || null;
+  }
+
+  /**
+   * Clears stored credentials and connection status for a specific Google service.
+   */
+  static async clearGoogleServiceCredentials(service: GoogleOAuthService): Promise<void> {
+    const d1 = getD1Database();
+    if (d1) {
+      await d1.prepare('DELETE FROM google_service_credentials WHERE service = ?').bind(service).run();
+      if (service === 'drive') {
+        await this.updateIntegration('google_drive', {
+          connected: false,
+          email: 'Not connected',
+        } as any);
+      } else {
+        await this.updateIntegration('youtube', {
+          connected: false,
+          channel_title: 'Not connected',
+          channel_id: 'None',
+        } as any);
+      }
+      return;
+    }
+
+    store.googleServiceCredentials.delete(service);
+    if (service === 'drive') {
+      store.integrations.google_drive.connected = false;
+      store.integrations.google_drive.email = 'Not connected';
+    } else {
+      store.integrations.youtube.connected = false;
+      store.integrations.youtube.channel_title = 'Not connected';
+      store.integrations.youtube.channel_id = 'None';
+    }
+  }
+
+  /**
+   * Persists AES-256-GCM encrypted Google credentials in legacy google_credentials table
+   * for backward compatibility with existing tests and single-record callers.
    */
   static async saveGoogleCredentials(creds: StoredGoogleCredentials): Promise<void> {
     const d1 = getD1Database();
@@ -1527,35 +1746,73 @@ export class Repository {
         )
         .run();
 
+      await this.saveGoogleServiceCredentials({
+        service: 'drive',
+        encryptedAccessToken: creds.encryptedAccessToken,
+        encryptedRefreshToken: creds.encryptedRefreshToken,
+        expiresAt: creds.expiresAt,
+        email: creds.email,
+        channelId: creds.channelId,
+        channelTitle: creds.channelTitle,
+        updatedAt: now,
+      });
+
+      await this.saveGoogleServiceCredentials({
+        service: 'youtube',
+        encryptedAccessToken: creds.encryptedAccessToken,
+        encryptedRefreshToken: creds.encryptedRefreshToken,
+        expiresAt: creds.expiresAt,
+        email: creds.email,
+        channelId: creds.channelId || 'legacy-channel-id',
+        channelTitle: creds.channelTitle || 'Connected Channel',
+        updatedAt: now,
+      });
+
       await this.updateIntegration('google_drive', {
         connected: true,
         email: creds.email,
       } as any);
 
-      if (creds.channelTitle) {
-        await this.updateIntegration('youtube', {
-          connected: true,
-          channel_title: creds.channelTitle,
-          channel_id: creds.channelId || 'None',
-        } as any);
-      }
+      await this.updateIntegration('youtube', {
+        connected: true,
+        channel_title: creds.channelTitle || 'Connected Channel',
+        channel_id: creds.channelId || 'legacy-channel-id',
+      } as any);
       return;
     }
 
     store.googleCredentials = creds;
+    const now = new Date().toISOString();
+    store.googleServiceCredentials.set('drive', {
+      service: 'drive',
+      encryptedAccessToken: creds.encryptedAccessToken,
+      encryptedRefreshToken: creds.encryptedRefreshToken,
+      expiresAt: creds.expiresAt,
+      email: creds.email,
+      channelId: creds.channelId,
+      channelTitle: creds.channelTitle,
+      updatedAt: now,
+    });
+    store.googleServiceCredentials.set('youtube', {
+      service: 'youtube',
+      encryptedAccessToken: creds.encryptedAccessToken,
+      encryptedRefreshToken: creds.encryptedRefreshToken,
+      expiresAt: creds.expiresAt,
+      email: creds.email,
+      channelId: creds.channelId || 'legacy-channel-id',
+      channelTitle: creds.channelTitle || 'Connected Channel',
+      updatedAt: now,
+    });
+
     store.integrations.google_drive.connected = true;
     store.integrations.google_drive.email = creds.email;
-    if (creds.channelTitle) {
-      store.integrations.youtube.connected = true;
-      store.integrations.youtube.channel_title = creds.channelTitle;
-      if (creds.channelId) {
-        store.integrations.youtube.channel_id = creds.channelId;
-      }
-    }
+    store.integrations.youtube.connected = true;
+    store.integrations.youtube.channel_title = creds.channelTitle || 'Connected Channel';
+    store.integrations.youtube.channel_id = creds.channelId || 'legacy-channel-id';
   }
 
   /**
-   * Retrieves AES-256-GCM encrypted Google credentials.
+   * Retrieves AES-256-GCM encrypted Google credentials from legacy table.
    */
   static async getGoogleCredentials(): Promise<StoredGoogleCredentials | null> {
     const d1 = getD1Database();
@@ -1582,6 +1839,7 @@ export class Repository {
     const d1 = getD1Database();
     if (d1) {
       await d1.prepare('DELETE FROM google_credentials WHERE id = \'default\'').run();
+      await d1.prepare('DELETE FROM google_service_credentials').run();
       await this.updateIntegration('google_drive', {
         connected: false,
         email: 'Not connected',
@@ -1595,6 +1853,7 @@ export class Repository {
     }
 
     store.googleCredentials = null;
+    store.googleServiceCredentials.clear();
     store.integrations.google_drive.connected = false;
     store.integrations.google_drive.email = 'Not connected';
     store.integrations.youtube.connected = false;
@@ -1607,12 +1866,13 @@ export class Repository {
   // ==========================================
 
   /**
-   * Persists OAuth CSRF state token with an expiration timestamp.
+   * Persists OAuth CSRF state token with an expiration timestamp and provider tag.
    */
   static async saveOAuthState(
     state: string,
     redirectUri: string,
-    expiresInMs = 600000
+    expiresInMs = 600000,
+    provider: string = 'google'
   ): Promise<void> {
     const now = new Date().toISOString();
     const expiresAt = Date.now() + expiresInMs;
@@ -1625,16 +1885,16 @@ export class Repository {
       await d1
         .prepare(`
           INSERT INTO oauth_states (state, provider, redirect_uri, created_at, expires_at)
-          VALUES (?, 'google', ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?)
         `)
-        .bind(state, redirectUri, now, expiresAt)
+        .bind(state, provider, redirectUri, now, expiresAt)
         .run();
       return;
     }
 
     store.oauthStates.set(state, {
       state,
-      provider: 'google',
+      provider,
       redirect_uri: redirectUri,
       created_at: now,
       expires_at: expiresAt,
@@ -1642,32 +1902,50 @@ export class Repository {
   }
 
   /**
-   * Validates and atomically consumes an OAuth CSRF state token (prevents replay attacks).
+   * Atomically fetches and consumes an OAuth CSRF state record (single-use replay defense).
    */
-  static async validateAndConsumeOAuthState(state: string): Promise<boolean> {
+  static async consumeOAuthStateRecord(
+    state: string
+  ): Promise<{ valid: boolean; provider: string; redirectUri: string } | null> {
     const d1 = getD1Database();
     if (d1) {
       const now = Date.now();
       const r = await d1
-        .prepare('SELECT state FROM oauth_states WHERE state = ? AND expires_at > ?')
+        .prepare('SELECT state, provider, redirect_uri FROM oauth_states WHERE state = ? AND expires_at > ?')
         .bind(state, now)
-        .first();
+        .first<{ state: string; provider: string; redirect_uri: string }>();
 
-      if (!r) return false;
+      if (!r) return null;
 
       // Atomically consume (single-use token)
       await d1.prepare('DELETE FROM oauth_states WHERE state = ?').bind(state).run();
-      return true;
+      return {
+        valid: true,
+        provider: r.provider || 'google',
+        redirectUri: r.redirect_uri,
+      };
     }
 
     const record = store.oauthStates.get(state);
-    if (!record) return false;
+    if (!record) return null;
     if (Date.now() > record.expires_at) {
       store.oauthStates.delete(state);
-      return false;
+      return null;
     }
     store.oauthStates.delete(state);
-    return true;
+    return {
+      valid: true,
+      provider: record.provider || 'google',
+      redirectUri: record.redirect_uri,
+    };
+  }
+
+  /**
+   * Validates and atomically consumes an OAuth CSRF state token (prevents replay attacks).
+   */
+  static async validateAndConsumeOAuthState(state: string): Promise<boolean> {
+    const record = await this.consumeOAuthStateRecord(state);
+    return Boolean(record?.valid);
   }
 
   // ==========================================
@@ -1699,22 +1977,44 @@ export class Repository {
   }
 
   static async evaluateExecutionReadiness(): Promise<ExecutionReadiness> {
-    const [profiles, activeProfile, automation, integrations, googleCreds, dailyUploadsUsed] =
-      await Promise.all([
-        this.getMonitoredProfiles(),
-        this.getActiveMonitoredProfile(),
-        this.getAutomationSettings(),
-        this.getIntegrations(),
-        this.getGoogleCredentials(),
-        this.getTodayCompletedUploadsCount(),
-      ]);
+    const [
+      profiles,
+      activeProfile,
+      automation,
+      integrations,
+      driveCreds,
+      youtubeCreds,
+      legacyCreds,
+      dailyUploadsUsed,
+    ] = await Promise.all([
+      this.getMonitoredProfiles(),
+      this.getActiveMonitoredProfile(),
+      this.getAutomationSettings(),
+      this.getIntegrations(),
+      this.getGoogleServiceCredentials('drive'),
+      this.getGoogleServiceCredentials('youtube'),
+      this.getGoogleCredentials(),
+      this.getTodayCompletedUploadsCount(),
+    ]);
 
-    const googleTokensAvailable = Boolean(googleCreds || process.env.GOOGLE_ACCESS_TOKEN);
+    const hasSeparateCreds = Boolean(driveCreds || youtubeCreds);
+    const driveTokensAvailable = Boolean(
+      driveCreds ||
+      (!hasSeparateCreds && legacyCreds) ||
+      process.env.GOOGLE_ACCESS_TOKEN
+    );
+    const youtubeTokensAvailable = Boolean(
+      (youtubeCreds && youtubeCreds.channelId) ||
+      (!hasSeparateCreds && legacyCreds && legacyCreds.channelTitle) ||
+      process.env.GOOGLE_ACCESS_TOKEN
+    );
+    const googleTokensAvailable = Boolean(driveTokensAvailable && youtubeTokensAvailable);
+
     const googleDriveConnected = Boolean(
-      integrations.google_drive.connected && googleTokensAvailable
+      integrations.google_drive.connected && driveTokensAvailable
     );
     const youtubeConnected = Boolean(
-      integrations.youtube.connected && googleTokensAvailable
+      integrations.youtube.connected && youtubeTokensAvailable
     );
 
     const activeProfileConfigured = Boolean(
