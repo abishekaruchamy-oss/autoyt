@@ -72,6 +72,21 @@ export const YOUTUBE_SCOPES = [
 export const GOOGLE_SCOPES = GOOGLE_DRIVE_SCOPES;
 
 /**
+ * Validates whether the granted OAuth scope string includes the necessary Google Drive permissions.
+ */
+export function hasRequiredDriveScope(scope?: string): boolean {
+  if (!scope) return false;
+  const parts = scope.split(/[\s,]+/);
+  return parts.some(
+    (s) =>
+      s === 'https://www.googleapis.com/auth/drive.file' ||
+      s === 'https://www.googleapis.com/auth/drive' ||
+      s === 'drive.file' ||
+      s === 'drive'
+  );
+}
+
+/**
  * Generates an independent Google OAuth 2.0 authorization URL for a specific service.
  * OMTTS include_granted_scopes to prevent cross-service scope bundling rejection.
  */
@@ -393,16 +408,30 @@ export async function saveGoogleServiceCredentials(
 export async function saveGoogleCredentials(tokens: GoogleTokens): Promise<GoogleAccountDetails> {
   const details = await fetchGoogleAccountDetails(tokens.access_token);
 
-  await saveGoogleServiceCredentials('drive', tokens, {
-    email: details.email,
-  });
+  await saveGoogleServiceCredentials(
+    'drive',
+    {
+      ...tokens,
+      scope: tokens.scope || GOOGLE_DRIVE_SCOPES,
+    },
+    {
+      email: details.email,
+    }
+  );
 
   if (details.youtubeChannel?.id) {
-    await saveGoogleServiceCredentials('youtube', tokens, {
-      email: details.email,
-      channelId: details.youtubeChannel.id,
-      channelTitle: details.youtubeChannel.title,
-    });
+    await saveGoogleServiceCredentials(
+      'youtube',
+      {
+        ...tokens,
+        scope: tokens.scope || YOUTUBE_SCOPES,
+      },
+      {
+        email: details.email,
+        channelId: details.youtubeChannel.id,
+        channelTitle: details.youtubeChannel.title,
+      }
+    );
   }
 
   return details;
@@ -414,6 +443,12 @@ export async function saveGoogleCredentials(tokens: GoogleTokens): Promise<Googl
 export async function getValidDriveAccessToken(): Promise<string> {
   const creds = await Repository.getGoogleServiceCredentials('drive');
   if (creds) {
+    if (!hasRequiredDriveScope(creds.scope)) {
+      throw new Error(
+        'Google Drive authorization missing required permissions (drive.file). Please re-authorize Google Drive in Settings > Integrations.'
+      );
+    }
+
     const EXPIRY_BUFFER_MS = 5 * 60 * 1000;
     const isExpiring = Date.now() > creds.expiresAt - EXPIRY_BUFFER_MS;
     if (!isExpiring) {
@@ -632,7 +667,9 @@ async function revokeGoogleTokenBestEffort(rawToken: string): Promise<void> {
 
 export async function isDriveConnected(): Promise<boolean> {
   const creds = await Repository.getGoogleServiceCredentials('drive');
-  if (creds) return true;
+  if (creds) {
+    return hasRequiredDriveScope(creds.scope);
+  }
   const ytCreds = await Repository.getGoogleServiceCredentials('youtube');
   if (!ytCreds) {
     const legacy = await Repository.getGoogleCredentials();

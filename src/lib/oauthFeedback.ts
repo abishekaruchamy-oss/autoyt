@@ -26,9 +26,9 @@ export function resolveOAuthBannerFeedback(
   const authNotice = input.authNotice?.trim();
   const warning = input.warning?.trim();
   const error = input.error?.trim();
+  const safeAccount = account ? sanitizeErrorMessage(account, '') : '';
 
   if (success === 'google_drive_connected') {
-    const safeAccount = account ? sanitizeErrorMessage(account, '') : '';
     return {
       variant: 'success',
       title: 'Google Drive Connected',
@@ -39,7 +39,6 @@ export function resolveOAuthBannerFeedback(
   }
 
   if (success === 'youtube_connected') {
-    const safeAccount = account ? sanitizeErrorMessage(account, '') : '';
     return {
       variant: 'success',
       title: 'YouTube Channel Connected',
@@ -50,7 +49,6 @@ export function resolveOAuthBannerFeedback(
   }
 
   if (warning === 'youtube_channel_not_found') {
-    const safeAccount = account ? sanitizeErrorMessage(account, '') : '';
     return {
       variant: 'warning',
       title: 'No YouTube Channel Found',
@@ -61,7 +59,6 @@ export function resolveOAuthBannerFeedback(
   }
 
   if (success === 'google_connected') {
-    const safeAccount = account ? sanitizeErrorMessage(account, '') : '';
     return {
       variant: 'success',
       title: 'Google Account Connected',
@@ -88,6 +85,14 @@ export function resolveOAuthBannerFeedback(
           title: 'Google Authorization Cancelled',
           message:
             'Consent was denied or cancelled at Google. No credentials were modified.',
+        };
+      case 'drive_scope_not_granted':
+        return {
+          variant: 'error',
+          title: 'Google Drive Permission Required',
+          message: safeAccount
+            ? `Google account ${safeAccount} was authenticated, but the Google Drive file permission (drive.file) was not granted. On Google's consent screen, you must check the box next to "See, edit, create, and delete only the specific Google Drive files you use with this app".`
+            : "Google account was authenticated, but the Google Drive file permission (drive.file) was not granted. On Google's consent screen, you must check the box next to \"See, edit, create, and delete only the specific Google Drive files you use with this app\".",
         };
       case 'invalid_csrf_state':
         return {

@@ -247,6 +247,8 @@ export interface IntegrationStatus {
     target_folder: string;
     quota_used_gb: number;
     quota_total_gb: number;
+    scope_missing?: boolean;
+    status?: 'connected' | 'scope_missing' | 'disconnected';
   };
   youtube: {
     connected: boolean;

@@ -59,6 +59,15 @@ export function IntegrationsPanel({
     integrations.google_drive.email !== 'Not connected' &&
     integrations.google_drive.email !== '';
 
+  const isDriveScopeMissing = Boolean(
+    !isDriveConnected &&
+      (integrations.google_drive.scope_missing ||
+        integrations.google_drive.status === 'scope_missing' ||
+        (integrations.google_drive.email &&
+          integrations.google_drive.email !== 'Not connected' &&
+          integrations.google_drive.email !== 'Not Authorized'))
+  );
+
   const isYouTubeConnected =
     integrations.youtube.connected &&
     integrations.youtube.channel_title !== 'Not connected' &&
@@ -242,6 +251,10 @@ export function IntegrationsPanel({
                 <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
                   <CheckCircle2 className="w-3 h-3" /> Connected
                 </span>
+              ) : isDriveScopeMissing ? (
+                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3" /> Drive Permission Missing
+                </span>
               ) : (
                 <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1">
                   <AlertCircle className="w-3 h-3" /> Authorization Needed
@@ -257,9 +270,18 @@ export function IntegrationsPanel({
               <div className="flex justify-between items-center">
                 <span className="text-zinc-400">Google Account:</span>
                 <span className="text-zinc-200 font-semibold font-mono text-[11px]">
-                  {isDriveConnected ? integrations.google_drive.email : 'Not Authorized'}
+                  {isDriveConnected
+                    ? integrations.google_drive.email
+                    : isDriveScopeMissing
+                    ? `${integrations.google_drive.email} (Permission Missing)`
+                    : 'Not Authorized'}
                 </span>
               </div>
+              {isDriveScopeMissing && (
+                <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-300">
+                  Google account authenticated, but Google Drive file permission (drive.file) was not granted. Please re-authorize and ensure the Google Drive box is checked on Google&apos;s consent screen.
+                </div>
+              )}
               <div className="flex justify-between items-center">
                 <span className="text-zinc-400">Storage Quota:</span>
                 <span className="text-zinc-200 font-semibold">
@@ -291,6 +313,14 @@ export function IntegrationsPanel({
                 <LogOut className="w-3.5 h-3.5" />
                 <span>Disconnect Google Drive</span>
               </button>
+            ) : isDriveScopeMissing ? (
+              <a
+                href="/api/auth/google/drive/authorize"
+                className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white flex items-center justify-center gap-2 transition-all shadow-md shadow-amber-600/30"
+              >
+                <LogIn className="w-4 h-4" />
+                <span>Grant Drive Permission</span>
+              </a>
             ) : (
               <a
                 href="/api/auth/google/drive/authorize"

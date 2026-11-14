@@ -290,6 +290,7 @@ async function runPhase97SeparateOAuthTests() {
               refresh_token: 'mock-drive-refresh-token-123',
               expires_in: 3600,
               token_type: 'Bearer',
+              scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email openid',
             }),
             { status: 200, headers: { 'Content-Type': 'application/json' } }
           );
@@ -330,6 +331,208 @@ async function runPhase97SeparateOAuthTests() {
       assert.ok(driveCreds, 'Drive credentials must be saved');
       assert.strictEqual(driveCreds.email, 'operator-drive@example.com');
       assert.strictEqual(decryptToken(driveCreds.encryptedAccessToken), 'mock-drive-access-token-123');
+    });
+
+    await test('Drive OAuth callback without drive.file fails closed with drive_scope_not_granted and is NOT marked connected', async () => {
+      // Clear drive credentials first to test clean state
+      await Repository.clearGoogleServiceCredentials('drive');
+
+      const state = 'valid-drive-missing-scope-state-123456';
+      await Repository.saveOAuthState(state, `${TEST_ORIGIN}/api/auth/google/callback`, 60000, 'google_drive');
+
+      const admin = makeAuthenticatedAdminSession();
+      const signedCookie = signOAuthStateCookieValue(state, admin.jti);
+      const adminHeaders = {
+        ...admin.headers,
+        cookie: `${admin.headers.cookie}; ${OAUTH_STATE_COOKIE_NAME}=${signedCookie}`,
+      };
+
+      globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+        const urlStr = url.toString();
+        if (urlStr.includes('oauth2.googleapis.com/token')) {
+          return new Response(
+            JSON.stringify({
+              access_token: 'mock-drive-no-scope-token',
+              refresh_token: 'mock-drive-no-scope-refresh',
+              expires_in: 3600,
+              token_type: 'Bearer',
+              scope: 'https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email openid',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        if (urlStr.includes('googleapis.com/oauth2/v2/userinfo')) {
+          return new Response(
+            JSON.stringify({
+              id: 'google-user-id-drive-no-scope',
+              email: 'operator-no-scope@example.com',
+              name: 'No Scope Operator',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return originalFetch(url, init);
+      }) as typeof fetch;
+
+      const callbackReq = makeRequest(`/api/auth/google/callback?code=mock-code-no-scope&state=${state}`, {
+        headers: adminHeaders,
+      });
+
+      const callbackRes = await googleCallbackRoute.GET(callbackReq);
+      assert.strictEqual(callbackRes.status, 307);
+      const loc = callbackRes.headers.get('location') || '';
+      assert.ok(loc.includes('error=drive_scope_not_granted'), `Redirect must indicate drive scope not granted: ${loc}`);
+      assert.ok(
+        loc.includes('account=operator-no-scope%40example.com') || loc.includes('account=operator-no-scope@example.com'),
+        `Redirect must contain account: ${loc}`
+      );
+
+      // Verify Drive is NOT connected in integrations
+      const integrations = await Repository.getIntegrations();
+      assert.strictEqual(integrations.google_drive.connected, false, 'Drive must NOT be marked connected');
+      assert.strictEqual(integrations.google_drive.scope_missing, true, 'scope_missing must be true');
+      assert.strictEqual(integrations.google_drive.status, 'scope_missing', 'status must be scope_missing');
+      assert.strictEqual(await isDriveConnected(), false, 'isDriveConnected must return false');
+    });
+
+    await test('Existing valid Drive credential is preserved when fresh callback lacks drive.file', async () => {
+      // Seed an existing valid Drive credential
+      await saveGoogleServiceCredentials(
+        'drive',
+        {
+          access_token: 'existing-valid-drive-token',
+          refresh_token: 'existing-valid-drive-refresh',
+          expires_in: 3600,
+          token_type: 'Bearer',
+          scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email openid',
+        },
+        { email: 'existing-valid@example.com' }
+      );
+      assert.strictEqual(await isDriveConnected(), true);
+
+      const state = 'fresh-drive-lacking-scope-state-789012';
+      await Repository.saveOAuthState(state, `${TEST_ORIGIN}/api/auth/google/callback`, 60000, 'google_drive');
+
+      const admin = makeAuthenticatedAdminSession();
+      const signedCookie = signOAuthStateCookieValue(state, admin.jti);
+      const adminHeaders = {
+        ...admin.headers,
+        cookie: `${admin.headers.cookie}; ${OAUTH_STATE_COOKIE_NAME}=${signedCookie}`,
+      };
+
+      globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+        const urlStr = url.toString();
+        if (urlStr.includes('oauth2.googleapis.com/token')) {
+          return new Response(
+            JSON.stringify({
+              access_token: 'untrusted-drive-token-without-file-scope',
+              refresh_token: 'untrusted-refresh-token',
+              expires_in: 3600,
+              token_type: 'Bearer',
+              scope: 'https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email openid',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        if (urlStr.includes('googleapis.com/oauth2/v2/userinfo')) {
+          return new Response(
+            JSON.stringify({
+              id: 'google-user-id-drive-fresh',
+              email: 'new-account-no-scope@example.com',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return originalFetch(url, init);
+      }) as typeof fetch;
+
+      const callbackReq = makeRequest(`/api/auth/google/callback?code=mock-code-incomplete&state=${state}`, {
+        headers: adminHeaders,
+      });
+
+      const callbackRes = await googleCallbackRoute.GET(callbackReq);
+      assert.strictEqual(callbackRes.status, 307);
+      const loc = callbackRes.headers.get('location') || '';
+      assert.ok(loc.includes('error=drive_scope_not_granted'), `Redirect must warn about missing drive scope: ${loc}`);
+
+      // Verify EXISTING valid Drive credentials remain intact in repository
+      const driveCreds = await Repository.getGoogleServiceCredentials('drive');
+      assert.ok(driveCreds, 'Existing valid Drive credential must be preserved');
+      assert.strictEqual(driveCreds.email, 'existing-valid@example.com');
+      assert.strictEqual(decryptToken(driveCreds.encryptedAccessToken), 'existing-valid-drive-token');
+      assert.strictEqual(await isDriveConnected(), true, 'Drive must remain connected via preserved credentials');
+    });
+
+    await test('YouTube credentials and connection remain untouched during Drive callback rejection', async () => {
+      // Seed a valid YouTube credential
+      await saveGoogleServiceCredentials(
+        'youtube',
+        {
+          access_token: 'isolated-youtube-token-test',
+          refresh_token: 'isolated-youtube-refresh-test',
+          expires_in: 3600,
+          token_type: 'Bearer',
+          scope: 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly',
+        },
+        {
+          email: 'creator-isolated@example.com',
+          channelId: 'UC_ISOLATED_CHANNEL',
+          channelTitle: 'Isolated Creator Channel',
+        }
+      );
+      assert.strictEqual(await isYouTubeConnected(), true);
+
+      // Execute a failing Drive callback (missing drive.file scope)
+      const state = 'drive-callback-isolated-yt-test';
+      await Repository.saveOAuthState(state, `${TEST_ORIGIN}/api/auth/google/callback`, 60000, 'google_drive');
+
+      const admin = makeAuthenticatedAdminSession();
+      const signedCookie = signOAuthStateCookieValue(state, admin.jti);
+      const adminHeaders = {
+        ...admin.headers,
+        cookie: `${admin.headers.cookie}; ${OAUTH_STATE_COOKIE_NAME}=${signedCookie}`,
+      };
+
+      globalThis.fetch = (async (url: string | URL | Request) => {
+        const urlStr = url.toString();
+        if (urlStr.includes('oauth2.googleapis.com/token')) {
+          return new Response(
+            JSON.stringify({
+              access_token: 'failing-drive-token',
+              expires_in: 3600,
+              token_type: 'Bearer',
+              scope: 'openid email profile',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        if (urlStr.includes('googleapis.com/oauth2/v2/userinfo')) {
+          return new Response(
+            JSON.stringify({
+              id: 'google-user-drive-fail',
+              email: 'failing-drive@example.com',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response('Not found', { status: 404 });
+      }) as typeof fetch;
+
+      const callbackReq = makeRequest(`/api/auth/google/callback?code=mock-code-fail-drive&state=${state}`, {
+        headers: adminHeaders,
+      });
+
+      const callbackRes = await googleCallbackRoute.GET(callbackReq);
+      assert.strictEqual(callbackRes.status, 307);
+
+      // Verify YouTube credentials are completely intact and untouched
+      const ytCreds = await Repository.getGoogleServiceCredentials('youtube');
+      assert.ok(ytCreds, 'YouTube credentials must still exist');
+      assert.strictEqual(ytCreds.channelId, 'UC_ISOLATED_CHANNEL');
+      assert.strictEqual(ytCreds.channelTitle, 'Isolated Creator Channel');
+      assert.strictEqual(ytCreds.email, 'creator-isolated@example.com');
+      assert.strictEqual(decryptToken(ytCreds.encryptedAccessToken), 'isolated-youtube-token-test');
+      assert.strictEqual(await isYouTubeConnected(), true, 'YouTube must remain connected');
     });
 
     await test('YouTube OAuth callback without channel fails closed with warning', async () => {
@@ -478,7 +681,7 @@ async function runPhase97SeparateOAuthTests() {
       const driveToken = await getValidDriveAccessToken();
       const ytToken = await getValidYouTubeAccessToken();
 
-      assert.strictEqual(driveToken, 'mock-drive-access-token-123');
+      assert.strictEqual(driveToken, 'existing-valid-drive-token');
       assert.strictEqual(ytToken, 'mock-yt-access-token-valid');
       assert.notStrictEqual(driveToken, ytToken, 'Drive and YouTube tokens must never be interchangeable');
     });
@@ -525,6 +728,7 @@ async function runPhase97SeparateOAuthTests() {
           refresh_token: 'reconnected-drive-refresh-token',
           expires_in: 3600,
           token_type: 'Bearer',
+          scope: 'https://www.googleapis.com/auth/drive.file',
         },
         { email: 'reconnected@example.com' }
       );
@@ -607,6 +811,7 @@ async function runPhase97SeparateOAuthTests() {
           refresh_token: 'drive-only-refresh',
           expires_in: 3600,
           token_type: 'Bearer',
+          scope: 'https://www.googleapis.com/auth/drive.file',
         },
         { email: 'drive-only@example.com' }
       );
@@ -660,6 +865,7 @@ async function runPhase97SeparateOAuthTests() {
           refresh_token: 'both-drive-refresh',
           expires_in: 3600,
           token_type: 'Bearer',
+          scope: 'https://www.googleapis.com/auth/drive.file',
         },
         { email: 'both@example.com' }
       );
@@ -668,6 +874,42 @@ async function runPhase97SeparateOAuthTests() {
       assert.strictEqual(stateBoth.google_drive_connected, true);
       assert.strictEqual(stateBoth.youtube_connected, true);
       assert.strictEqual(stateBoth.blocking_reasons.length, 0, 'No blocking reasons when fully configured');
+    });
+
+    await test('Execution readiness blocks with specific reason when Drive scope is missing', async () => {
+      // Save Drive credentials with identity-only scope
+      await saveGoogleServiceCredentials(
+        'drive',
+        {
+          access_token: 'drive-no-file-scope-token',
+          refresh_token: 'drive-no-file-scope-refresh',
+          expires_in: 3600,
+          token_type: 'Bearer',
+          scope: 'https://www.googleapis.com/auth/userinfo.email openid',
+        },
+        { email: 'no-file-scope@example.com' }
+      );
+
+      const readiness = await Repository.evaluateExecutionReadiness();
+      assert.strictEqual(readiness.ready_for_live_upload, false);
+      assert.strictEqual(readiness.google_drive_connected, false);
+      assert.ok(
+        readiness.blocking_reasons.some((r) => r.includes('Google Drive permission (drive.file) not granted')),
+        `Must indicate missing drive.file scope in blocking reasons: ${JSON.stringify(readiness.blocking_reasons)}`
+      );
+
+      // Restore valid Drive credentials with drive.file scope
+      await saveGoogleServiceCredentials(
+        'drive',
+        {
+          access_token: 'both-drive-token',
+          refresh_token: 'both-drive-refresh',
+          expires_in: 3600,
+          token_type: 'Bearer',
+          scope: 'https://www.googleapis.com/auth/drive.file',
+        },
+        { email: 'both@example.com' }
+      );
     });
 
     // -------------------------------------------------------------------------

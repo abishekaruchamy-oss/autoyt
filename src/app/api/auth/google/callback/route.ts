@@ -13,6 +13,7 @@ import {
   fetchGoogleUserProfile,
   fetchYouTubeChannelDetails,
   saveGoogleServiceCredentials,
+  hasRequiredDriveScope,
 } from '@/server/services/googleAuthService';
 
 export async function GET(request: NextRequest) {
@@ -99,6 +100,25 @@ export async function GET(request: NextRequest) {
     } else {
       // Google Drive OAuth Flow: Retrieve Google account identity only without YouTube calls
       const userProfile = await fetchGoogleUserProfile(tokens.access_token);
+      const hasDriveScope = hasRequiredDriveScope(tokens.scope);
+
+      if (!hasDriveScope) {
+        console.warn('Google Drive OAuth callback received tokens without drive.file scope.');
+        const existingDriveCreds = await Repository.getGoogleServiceCredentials('drive');
+        if (!existingDriveCreds || !hasRequiredDriveScope(existingDriveCreds.scope)) {
+          await Repository.updateIntegration('google_drive', {
+            connected: false,
+            email: userProfile.email,
+            scope_missing: true,
+            status: 'scope_missing',
+          });
+        }
+
+        return redirectWithClearedState(
+          `/settings?error=drive_scope_not_granted&account=${encodeURIComponent(userProfile.email)}`
+        );
+      }
+
       await saveGoogleServiceCredentials('drive', tokens, {
         email: userProfile.email,
       });

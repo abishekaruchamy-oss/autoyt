@@ -45,6 +45,23 @@ export interface OAuthStateRecord {
   expires_at: number;
 }
 
+const REQUIRED_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+
+/**
+ * Validates whether the granted OAuth scope string includes the necessary Google Drive permissions.
+ */
+function hasRequiredDriveScope(scope?: string): boolean {
+  if (!scope) return false;
+  const parts = scope.split(/[\s,]+/);
+  return parts.some(
+    (s) =>
+      s === REQUIRED_DRIVE_SCOPE ||
+      s === 'https://www.googleapis.com/auth/drive' ||
+      s === 'drive.file' ||
+      s === 'drive'
+  );
+}
+
 /**
  * In-memory fallback DataStore.
  * STRICT INVARIANT: Permitted ONLY during tests and non-production development.
@@ -1460,14 +1477,21 @@ export class Repository {
       ]);
 
       if (driveCreds) {
-        base.google_drive.connected = true;
+        const hasScope = hasRequiredDriveScope(driveCreds.scope);
+        base.google_drive.connected = hasScope;
         base.google_drive.email = driveCreds.email;
-      } else if (!youtubeCreds && legacyCreds) {
+        base.google_drive.scope_missing = !hasScope;
+        base.google_drive.status = hasScope ? 'connected' : 'scope_missing';
+      } else if (!youtubeCreds && legacyCreds && !base.google_drive.scope_missing) {
         base.google_drive.connected = true;
         base.google_drive.email = legacyCreds.email;
+        base.google_drive.status = 'connected';
       } else {
         base.google_drive.connected = false;
-        base.google_drive.email = 'Not connected';
+        if (!base.google_drive.scope_missing) {
+          base.google_drive.email = 'Not connected';
+          base.google_drive.status = 'disconnected';
+        }
       }
 
       if (youtubeCreds && youtubeCreds.channelId) {
@@ -1492,14 +1516,21 @@ export class Repository {
     const legacyCreds = store.googleCredentials;
 
     if (driveCreds) {
-      store.integrations.google_drive.connected = true;
+      const hasScope = hasRequiredDriveScope(driveCreds.scope);
+      store.integrations.google_drive.connected = hasScope;
       store.integrations.google_drive.email = driveCreds.email;
-    } else if (!youtubeCreds && legacyCreds) {
+      store.integrations.google_drive.scope_missing = !hasScope;
+      store.integrations.google_drive.status = hasScope ? 'connected' : 'scope_missing';
+    } else if (!youtubeCreds && legacyCreds && !store.integrations.google_drive.scope_missing) {
       store.integrations.google_drive.connected = true;
       store.integrations.google_drive.email = legacyCreds.email;
+      store.integrations.google_drive.status = 'connected';
     } else {
       store.integrations.google_drive.connected = false;
-      store.integrations.google_drive.email = 'Not connected';
+      if (!store.integrations.google_drive.scope_missing) {
+        store.integrations.google_drive.email = 'Not connected';
+        store.integrations.google_drive.status = 'disconnected';
+      }
     }
 
     if (youtubeCreds && youtubeCreds.channelId) {
@@ -1610,25 +1641,31 @@ export class Repository {
           )
           .run();
 
+        const hasScope = hasRequiredDriveScope(creds.scope);
         await this.updateIntegration('google_drive', {
-          connected: true,
+          connected: hasScope,
           email: creds.email,
-        } as any);
+          scope_missing: !hasScope,
+          status: hasScope ? 'connected' : 'scope_missing',
+        });
       } else if (creds.service === 'youtube') {
         const isConnected = Boolean(creds.channelId);
         await this.updateIntegration('youtube', {
           connected: isConnected,
           channel_title: creds.channelTitle || (isConnected ? 'Connected Channel' : 'No Channel Found'),
           channel_id: creds.channelId || 'None',
-        } as any);
+        });
       }
       return;
     }
 
     store.googleServiceCredentials.set(creds.service, creds);
     if (creds.service === 'drive') {
-      store.integrations.google_drive.connected = true;
+      const hasScope = hasRequiredDriveScope(creds.scope);
+      store.integrations.google_drive.connected = hasScope;
       store.integrations.google_drive.email = creds.email;
+      store.integrations.google_drive.scope_missing = !hasScope;
+      store.integrations.google_drive.status = hasScope ? 'connected' : 'scope_missing';
       store.googleCredentials = {
         encryptedAccessToken: creds.encryptedAccessToken,
         encryptedRefreshToken: creds.encryptedRefreshToken,
@@ -1686,25 +1723,36 @@ export class Repository {
     const d1 = getD1Database();
     if (d1) {
       await d1.prepare('DELETE FROM google_service_credentials WHERE service = ?').bind(service).run();
+      const remaining = await d1.prepare('SELECT COUNT(*) as count FROM google_service_credentials').first<{ count: number }>();
+      if (!remaining || remaining.count === 0) {
+        await d1.prepare("DELETE FROM google_credentials WHERE id = 'default'").run();
+      }
       if (service === 'drive') {
         await this.updateIntegration('google_drive', {
           connected: false,
           email: 'Not connected',
-        } as any);
+          scope_missing: false,
+          status: 'disconnected',
+        });
       } else {
         await this.updateIntegration('youtube', {
           connected: false,
           channel_title: 'Not connected',
           channel_id: 'None',
-        } as any);
+        });
       }
       return;
     }
 
     store.googleServiceCredentials.delete(service);
+    if (store.googleServiceCredentials.size === 0) {
+      store.googleCredentials = null;
+    }
     if (service === 'drive') {
       store.integrations.google_drive.connected = false;
       store.integrations.google_drive.email = 'Not connected';
+      store.integrations.google_drive.scope_missing = false;
+      store.integrations.google_drive.status = 'disconnected';
     } else {
       store.integrations.youtube.connected = false;
       store.integrations.youtube.channel_title = 'Not connected';
@@ -1754,6 +1802,7 @@ export class Repository {
         email: creds.email,
         channelId: creds.channelId,
         channelTitle: creds.channelTitle,
+        scope: REQUIRED_DRIVE_SCOPE,
         updatedAt: now,
       });
 
@@ -1791,6 +1840,7 @@ export class Repository {
       email: creds.email,
       channelId: creds.channelId,
       channelTitle: creds.channelTitle,
+      scope: REQUIRED_DRIVE_SCOPE,
       updatedAt: now,
     });
     store.googleServiceCredentials.set('youtube', {
@@ -1998,8 +2048,9 @@ export class Repository {
     ]);
 
     const hasSeparateCreds = Boolean(driveCreds || youtubeCreds);
+    const driveHasScope = driveCreds ? hasRequiredDriveScope(driveCreds.scope) : false;
     const driveTokensAvailable = Boolean(
-      driveCreds ||
+      (driveCreds && driveHasScope) ||
       (!hasSeparateCreds && legacyCreds) ||
       process.env.GOOGLE_ACCESS_TOKEN
     );
@@ -2056,7 +2107,13 @@ export class Repository {
     }
 
     if (!googleDriveConnected) {
-      blockingReasons.push('Google Drive OAuth integration is not connected in Settings.');
+      if (driveCreds && !driveHasScope) {
+        blockingReasons.push(
+          'Google Drive permission (drive.file) not granted. Re-authorize Google Drive in Settings.'
+        );
+      } else {
+        blockingReasons.push('Google Drive OAuth integration is not connected in Settings.');
+      }
     }
 
     if (!youtubeConnected) {
