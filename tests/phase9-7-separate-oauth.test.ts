@@ -28,10 +28,12 @@ import {
   getGoogleDriveAuthUrl,
   getYouTubeAuthUrl,
   saveGoogleServiceCredentials,
+  saveGoogleCredentials,
   getValidDriveAccessToken,
   getValidYouTubeAccessToken,
   isDriveConnected,
   isYouTubeConnected,
+  hasRequiredDriveScope,
 } from '../src/server/services/googleAuthService';
 
 import * as driveAuthorizeRoute from '../src/app/api/auth/google/drive/authorize/route';
@@ -533,6 +535,123 @@ async function runPhase97SeparateOAuthTests() {
       assert.strictEqual(ytCreds.email, 'creator-isolated@example.com');
       assert.strictEqual(decryptToken(ytCreds.encryptedAccessToken), 'isolated-youtube-token-test');
       assert.strictEqual(await isYouTubeConnected(), true, 'YouTube must remain connected');
+    });
+
+    await test('Broad Google Drive scope (https://www.googleapis.com/auth/drive) rejected under least-privilege policy', async () => {
+      // 1. Direct unit verification: hasRequiredDriveScope strictly rejects the broad scope
+      assert.strictEqual(
+        hasRequiredDriveScope('https://www.googleapis.com/auth/drive'),
+        false,
+        'Broad scope must be rejected'
+      );
+      assert.strictEqual(hasRequiredDriveScope('drive'), false, 'Short broad alias must be rejected');
+      assert.strictEqual(
+        hasRequiredDriveScope('https://www.googleapis.com/auth/drive.file'),
+        true,
+        'Exact drive.file scope must be accepted'
+      );
+
+      // Clear Drive to test fresh rejection
+      await Repository.clearGoogleServiceCredentials('drive');
+
+      const state = 'drive-broad-scope-test-state-112233';
+      await Repository.saveOAuthState(state, `${TEST_ORIGIN}/api/auth/google/callback`, 60000, 'google_drive');
+
+      const admin = makeAuthenticatedAdminSession();
+      const signedCookie = signOAuthStateCookieValue(state, admin.jti);
+      const adminHeaders = {
+        ...admin.headers,
+        cookie: `${admin.headers.cookie}; ${OAUTH_STATE_COOKIE_NAME}=${signedCookie}`,
+      };
+
+      globalThis.fetch = (async (url: string | URL | Request) => {
+        const urlStr = url.toString();
+        if (urlStr.includes('oauth2.googleapis.com/token')) {
+          return new Response(
+            JSON.stringify({
+              access_token: 'broad-scope-drive-token',
+              refresh_token: 'broad-scope-drive-refresh',
+              expires_in: 3600,
+              token_type: 'Bearer',
+              scope: 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/userinfo.email openid',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        if (urlStr.includes('googleapis.com/oauth2/v2/userinfo')) {
+          return new Response(
+            JSON.stringify({
+              id: 'google-user-broad-scope',
+              email: 'operator-broad@example.com',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response('Not found', { status: 404 });
+      }) as typeof fetch;
+
+      const callbackReq = makeRequest(`/api/auth/google/callback?code=mock-broad-code&state=${state}`, {
+        headers: adminHeaders,
+      });
+
+      const callbackRes = await googleCallbackRoute.GET(callbackReq);
+      assert.strictEqual(callbackRes.status, 307);
+      const loc = callbackRes.headers.get('location') || '';
+      assert.ok(loc.includes('error=drive_scope_not_granted'), `Must reject broad scope with error: ${loc}`);
+
+      const integrations = await Repository.getIntegrations();
+      assert.strictEqual(integrations.google_drive.connected, false, 'Drive must NOT connect on broad scope');
+      assert.strictEqual(await isDriveConnected(), false);
+    });
+
+    await test('Missing tokens.scope fails closed and cannot establish Drive connection in saveGoogleCredentials', async () => {
+      // 1. Direct unit verification: hasRequiredDriveScope strictly rejects missing scope
+      assert.strictEqual(hasRequiredDriveScope(undefined), false);
+      assert.strictEqual(hasRequiredDriveScope(''), false);
+
+      // Clear Drive first
+      await Repository.clearGoogleServiceCredentials('drive');
+
+      // Test saveGoogleCredentials without scope property
+      globalThis.fetch = (async (url: string | URL | Request) => {
+        const urlStr = url.toString();
+        if (urlStr.includes('googleapis.com/oauth2/v2/userinfo')) {
+          return new Response(
+            JSON.stringify({
+              id: 'google-user-no-scope',
+              email: 'noscope@example.com',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response('Not found', { status: 404 });
+      }) as typeof fetch;
+
+      await saveGoogleCredentials({
+        access_token: 'no-scope-access-token-999',
+        refresh_token: 'no-scope-refresh-token-999',
+        expires_in: 3600,
+        token_type: 'Bearer',
+        // scope is omitted!
+      });
+
+      // Verify that missing scope fails closed and is NOT inferred from requested scopes
+      const integrations = await Repository.getIntegrations();
+      assert.strictEqual(integrations.google_drive.connected, false, 'Drive must NOT be marked connected when scope is missing');
+      assert.strictEqual(await isDriveConnected(), false, 'isDriveConnected must fail closed when scope is missing');
+
+      // Restore valid Drive credential for subsequent dual-service tests
+      await saveGoogleServiceCredentials(
+        'drive',
+        {
+          access_token: 'existing-valid-drive-token',
+          refresh_token: 'existing-valid-drive-refresh',
+          expires_in: 3600,
+          token_type: 'Bearer',
+          scope: 'https://www.googleapis.com/auth/drive.file',
+        },
+        { email: 'existing-valid@example.com' }
+      );
     });
 
     await test('YouTube OAuth callback without channel fails closed with warning', async () => {

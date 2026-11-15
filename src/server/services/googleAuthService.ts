@@ -75,14 +75,12 @@ export const GOOGLE_SCOPES = GOOGLE_DRIVE_SCOPES;
  * Validates whether the granted OAuth scope string includes the necessary Google Drive permissions.
  */
 export function hasRequiredDriveScope(scope?: string): boolean {
-  if (!scope) return false;
+  if (!scope || typeof scope !== 'string') return false;
   const parts = scope.split(/[\s,]+/);
   return parts.some(
     (s) =>
       s === 'https://www.googleapis.com/auth/drive.file' ||
-      s === 'https://www.googleapis.com/auth/drive' ||
-      s === 'drive.file' ||
-      s === 'drive'
+      s === 'drive.file'
   );
 }
 
@@ -412,7 +410,7 @@ export async function saveGoogleCredentials(tokens: GoogleTokens): Promise<Googl
     'drive',
     {
       ...tokens,
-      scope: tokens.scope || GOOGLE_DRIVE_SCOPES,
+      scope: tokens.scope,
     },
     {
       email: details.email,
@@ -424,7 +422,7 @@ export async function saveGoogleCredentials(tokens: GoogleTokens): Promise<Googl
       'youtube',
       {
         ...tokens,
-        scope: tokens.scope || YOUTUBE_SCOPES,
+        scope: tokens.scope,
       },
       {
         email: details.email,

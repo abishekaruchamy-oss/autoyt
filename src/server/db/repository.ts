@@ -51,14 +51,12 @@ const REQUIRED_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
  * Validates whether the granted OAuth scope string includes the necessary Google Drive permissions.
  */
 function hasRequiredDriveScope(scope?: string): boolean {
-  if (!scope) return false;
+  if (!scope || typeof scope !== 'string') return false;
   const parts = scope.split(/[\s,]+/);
   return parts.some(
     (s) =>
       s === REQUIRED_DRIVE_SCOPE ||
-      s === 'https://www.googleapis.com/auth/drive' ||
-      s === 'drive.file' ||
-      s === 'drive'
+      s === 'drive.file'
   );
 }
 
