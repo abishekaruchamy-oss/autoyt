@@ -623,21 +623,41 @@ export class PipelineService {
       }
     }
 
-    // 4. Create initial job record in SUBMITTED state
-    const job = await Repository.addUploadJob({
-      reel_id: `reel_${shortcode}`,
-      shortcode,
-      original_reel_url: canonicalUrl || `https://www.instagram.com/reel/${shortcode}/`,
-      caption: payload.captionOverride || `Reel #${shortcode}`,
-      account_username: 'creator',
-      status: 'SUBMITTED',
-      rights_confirmed: true,
-      media_source_type: payload.directVideoUrl
-        ? 'USER_DIRECT_STREAM'
-        : payload.driveFileId
-        ? 'GOOGLE_DRIVE_SOURCE'
-        : 'PUBLIC_PROBE',
-    });
+    // 4. Create initial job record in SUBMITTED state (reusing existing job if in pending/waiting/failed state to prevent duplicates)
+    const authorUsername = payload.captionOverride?.includes('@zackdfilms')
+      ? 'zackdfilms'
+      : (existing?.account_username && existing.account_username !== 'creator' ? existing.account_username : 'zackdfilms');
+
+    let job: UploadJob;
+    if (existing) {
+      job = (await Repository.updateUploadJob(existing.id, {
+        status: 'SUBMITTED',
+        caption: payload.captionOverride || existing.caption,
+        account_username: authorUsername,
+        rights_confirmed: true,
+        media_source_type: payload.directVideoUrl
+          ? 'USER_DIRECT_STREAM'
+          : payload.driveFileId
+          ? 'GOOGLE_DRIVE_SOURCE'
+          : 'PUBLIC_PROBE',
+        error_details: null,
+      })) || existing;
+    } else {
+      job = await Repository.addUploadJob({
+        reel_id: `reel_${shortcode}`,
+        shortcode,
+        original_reel_url: canonicalUrl || `https://www.instagram.com/reel/${shortcode}/`,
+        caption: payload.captionOverride || `Reel #${shortcode}`,
+        account_username: authorUsername,
+        status: 'SUBMITTED',
+        rights_confirmed: true,
+        media_source_type: payload.directVideoUrl
+          ? 'USER_DIRECT_STREAM'
+          : payload.driveFileId
+          ? 'GOOGLE_DRIVE_SOURCE'
+          : 'PUBLIC_PROBE',
+      });
+    }
 
     // 5. State: VALIDATING -> RESOLVING_MEDIA
     await Repository.updateUploadJob(job.id, { status: 'VALIDATING' });
@@ -649,6 +669,8 @@ export class PipelineService {
       driveFileId: payload.driveFileId,
       confirmedRights: payload.confirmedRights,
       sandbox: options?.sandbox,
+      caption: payload.captionOverride,
+      username: authorUsername,
     });
 
     if (resolution.status === 'WAITING_FOR_AUTHORIZED_MEDIA') {
@@ -755,7 +777,7 @@ export class PipelineService {
       // Step A: Archive to Google Drive
       await Repository.updateUploadJob(job.id, { status: 'ARCHIVING_TO_DRIVE' });
       const folderId = await GoogleDriveService.getOrCreateFolder(folderName, driveToken);
-      const driveFileName = `reel_${shortcode}_${resolution.username || 'creator'}.mp4`;
+      const driveFileName = `reel_${shortcode}_${resolution.username || job.account_username || 'zackdfilms'}.mp4`;
 
       const driveResult = await GoogleDriveService.streamVideoToDrive(
         resolution.mediaUrl!,
@@ -775,7 +797,7 @@ export class PipelineService {
       await Repository.logActivity(
         'DRIVE_UPLOAD',
         `Archived Reel #${shortcode} to Google Drive folder "${folderName}"`,
-        resolution.username || 'creator',
+        resolution.username || job.account_username || 'zackdfilms',
         { fileId: driveResult.fileId, fileName: driveFileName }
       );
 
@@ -786,7 +808,7 @@ export class PipelineService {
         resolution.mediaUrl!,
         {
           caption: payload.captionOverride || resolution.caption || `Reel #${shortcode}`,
-          username: resolution.username || 'creator',
+          username: resolution.username || job.account_username || 'zackdfilms',
           privacyStatus: visibility,
         },
         youtubeToken,

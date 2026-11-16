@@ -265,6 +265,8 @@ export class UserDirectStreamProvider implements IMediaProvider {
       canonicalUrl: `https://www.instagram.com/reel/${shortcode}/`,
       provider: 'USER_DIRECT_STREAM',
       mediaUrl: options.directVideoUrl,
+      caption: options?.caption,
+      username: options?.username || (options?.caption?.includes('@zackdfilms') ? 'zackdfilms' : undefined),
       status: 'MEDIA_AVAILABLE',
       reason: 'User-provided authorized media source stream.',
       requiresManualMedia: false,
@@ -512,6 +514,8 @@ export class MediaResolver {
       metaToken?: string;
       sandbox?: boolean;
       disableYtDlp?: boolean;
+      caption?: string;
+      username?: string;
     }
   ): Promise<MediaResolutionResult> {
     const extraction = extractReelShortcode(inputUrl);
