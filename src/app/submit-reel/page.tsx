@@ -23,7 +23,7 @@ export default function SubmitReelPage() {
   const [reelUrl, setReelUrl] = useState('');
   const [directVideoUrl, setDirectVideoUrl] = useState('');
   const [captionOverride, setCaptionOverride] = useState('');
-  const [visibility, setVisibility] = useState<PublishingVisibility>('private');
+  const [visibility, setVisibility] = useState<PublishingVisibility>('public');
   const [confirmedRights, setConfirmedRights] = useState(false);
   const [useSandbox, setUseSandbox] = useState(false);
 
@@ -293,7 +293,7 @@ export default function SubmitReelPage() {
                 YouTube Shorts Visibility
               </label>
               <div className="grid grid-cols-3 gap-2">
-                {(['private', 'unlisted', 'public'] as PublishingVisibility[]).map((v) => (
+                {(['public', 'unlisted', 'private'] as PublishingVisibility[]).map((v) => (
                   <button
                     key={v}
                     type="button"
@@ -304,7 +304,7 @@ export default function SubmitReelPage() {
                         : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
                     }`}
                   >
-                    {v === 'private' ? 'Private (Default)' : v}
+                    {v === 'public' ? 'Public (Default)' : v}
                   </button>
                 ))}
               </div>

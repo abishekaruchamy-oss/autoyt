@@ -64,9 +64,9 @@ async function runD1TestSuite() {
   assert.strictEqual(initialSettings.id, 'default');
   assert.strictEqual(initialSettings.is_enabled, true);
   assert.strictEqual(initialSettings.polling_interval_minutes, 30);
-  assert.strictEqual(initialSettings.default_visibility, 'private', 'Default visibility must be private');
+  assert.strictEqual(initialSettings.default_visibility, 'public', 'Default visibility must be public');
   assert.strictEqual(initialSettings.is_running, false);
-  console.log('✓ Default automation_settings row verified (id="default", is_enabled=true, default_visibility="private").');
+  console.log('✓ Default automation_settings row verified (id="default", is_enabled=true, default_visibility="public").');
 
   // -------------------------------------------------------------
   // Test 2: Profile CRUD & Active Source Management in D1

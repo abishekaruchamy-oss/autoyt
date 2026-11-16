@@ -718,7 +718,7 @@ export class Repository {
         is_running: Boolean(row.is_running),
         lock_acquired_at: row.lock_acquired_at,
         max_uploads_per_day: Number(row.max_uploads_per_day || 5),
-        default_visibility: row.default_visibility || 'private',
+        default_visibility: row.default_visibility || 'public',
         drive_folder_id: row.drive_folder_id || 'root',
         drive_folder_name: row.drive_folder_name || 'Instagram Reels Backup',
         created_at: row.created_at,

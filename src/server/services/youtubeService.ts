@@ -109,7 +109,7 @@ export class YouTubeService {
         categoryId: '22', // People & Blogs
       },
       status: {
-        privacyStatus: metadata.privacyStatus || 'private',
+        privacyStatus: metadata.privacyStatus || 'public',
         selfDeclaredMadeForKids: false,
         embeddable: true,
       },
@@ -247,7 +247,7 @@ export class YouTubeService {
             videoId: existingStatus.videoId,
             videoUrl: existingStatus.videoUrl || `https://youtube.com/shorts/${existingStatus.videoId}`,
             title,
-            privacyStatus: metadata.privacyStatus || 'private',
+            privacyStatus: metadata.privacyStatus || 'public',
             publishedAt: new Date().toISOString(),
             sessionUri,
           };
@@ -356,9 +356,48 @@ export class YouTubeService {
       videoId,
       videoUrl: `https://youtube.com/shorts/${videoId}`,
       title,
-      privacyStatus: metadata.privacyStatus || 'private',
+      privacyStatus: metadata.privacyStatus || 'public',
       publishedAt: new Date().toISOString(),
       sessionUri,
+    };
+  }
+
+  /**
+   * Retrieves verified video metadata and status from YouTube Data API v3
+   */
+  static async getVideoDetails(
+    videoId: string,
+    accessToken: string
+  ): Promise<{
+    id: string;
+    title: string;
+    description: string;
+    channelId: string;
+    privacyStatus: string;
+    uploadStatus: string;
+  }> {
+    const url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,status&id=${encodeURIComponent(
+      videoId
+    )}`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Failed to fetch YouTube video details: ${err}`);
+    }
+    const data = (await res.json()) as any;
+    if (!data.items || data.items.length === 0) {
+      throw new Error(`YouTube video ${videoId} not found.`);
+    }
+    const item = data.items[0];
+    return {
+      id: item.id,
+      title: item.snippet?.title || '',
+      description: item.snippet?.description || '',
+      channelId: item.snippet?.channelId || '',
+      privacyStatus: item.status?.privacyStatus || '',
+      uploadStatus: item.status?.uploadStatus || '',
     };
   }
 }

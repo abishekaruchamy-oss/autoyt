@@ -234,7 +234,7 @@ export class PipelineService {
                 driveToken,
                 youtubeToken,
                 automation.drive_folder_name,
-                automation.default_visibility || 'private'
+                automation.default_visibility || 'public'
               );
               uploadsThisRun += 1;
               result.jobsSucceeded += 1;
@@ -737,7 +737,7 @@ export class PipelineService {
 
     // 8. Streaming Transfer Pipeline (Zero Local SSD Disk Consumption)
     const automation = await Repository.getAutomationSettings();
-    const visibility = payload.visibility || automation.default_visibility || 'private';
+    const visibility = payload.visibility || automation.default_visibility || 'public';
     const folderName = automation.drive_folder_name || 'Instagram Reels Backup';
 
     if (!options?.sandbox) {

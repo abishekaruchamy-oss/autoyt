@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
       directVideoUrl: directVideoUrl || undefined,
       driveFileId: driveFileId || undefined,
       captionOverride: captionOverride || undefined,
-      visibility: visibility || 'private',
+      visibility: visibility || 'public',
       confirmedRights: Boolean(confirmedRights),
     };
 
