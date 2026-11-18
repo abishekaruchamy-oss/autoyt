@@ -510,9 +510,27 @@ export class PipelineService {
         sourceHeaders = GoogleDriveService.getAuthHeaders(driveToken);
       } else {
         // Need to archive to Drive first
+        const isInstagramWebpageUrl = (candidate: string): boolean => {
+          try {
+            const parsed = new URL(candidate);
+            const host = parsed.hostname.toLowerCase();
+            return (
+              (host === 'instagram.com' || host === 'www.instagram.com' || host.endsWith('.instagram.com')) &&
+              !parsed.pathname.toLowerCase().endsWith('.mp4')
+            );
+          } catch {
+            return false;
+          }
+        };
+
         let sourceUrlToArchive = job.original_reel_url;
 
         if (options?.directVideoUrl) {
+          if (isInstagramWebpageUrl(options.directVideoUrl)) {
+            throw new Error(
+              'Direct MP4 stream URL cannot be an instagram.com webpage URL. Provide a verified direct CDN .mp4 stream URL.'
+            );
+          }
           const resolution = await MediaResolver.resolveReel(job.original_reel_url, {
             directVideoUrl: options.directVideoUrl,
             confirmedRights: true,
@@ -523,6 +541,10 @@ export class PipelineService {
             throw new Error(resolution.reason || 'Failed to resolve provided direct video URL.');
           }
           sourceUrlToArchive = resolution.mediaUrl;
+        } else if (isInstagramWebpageUrl(sourceUrlToArchive)) {
+          throw new Error(
+            'A verified direct MP4 stream URL is required to resume this job before Google Drive archival. Click "Attach Media" and paste the direct CDN .mp4 URL.'
+          );
         }
 
         const folderId = await GoogleDriveService.getOrCreateFolder(

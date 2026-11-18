@@ -48,12 +48,50 @@ export function UploadHistoryTable({
     setAttachError(null);
   };
 
+  const inspectDirectUrlInput = (raw: string): {
+    status: 'empty' | 'invalid' | 'webpage' | 'valid';
+    host?: string;
+    isMp4Path?: boolean;
+    message?: string;
+  } => {
+    const trimmed = raw.trim();
+    if (!trimmed) return { status: 'empty' };
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol !== 'https:') {
+        return { status: 'invalid', message: 'Direct media URL must use HTTPS.' };
+      }
+      const host = parsed.hostname.toLowerCase();
+      const isMp4Path = parsed.pathname.toLowerCase().endsWith('.mp4');
+      if (
+        (host === 'instagram.com' || host === 'www.instagram.com' || host.endsWith('.instagram.com')) &&
+        !isMp4Path
+      ) {
+        return {
+          status: 'webpage',
+          host,
+          isMp4Path: false,
+          message:
+            'Instagram webpage URL detected (instagram.com/reel/...). Paste the direct Meta CDN .mp4 stream URL instead.',
+        };
+      }
+      return { status: 'valid', host, isMp4Path };
+    } catch {
+      return { status: 'invalid', message: 'Enter a valid HTTPS direct MP4 stream URL.' };
+    }
+  };
+
+  const directUrlCheck = inspectDirectUrlInput(attachDirectUrl);
+
   const handleAttachAndResume = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!attachJob) return;
     const trimmedUrl = attachDirectUrl.trim();
-    if (!trimmedUrl) {
-      setAttachError('Please provide a creator-authorized HTTPS direct MP4 stream URL.');
+    const check = inspectDirectUrlInput(trimmedUrl);
+    if (check.status !== 'valid') {
+      setAttachError(
+        check.message || 'Please provide a creator-authorized HTTPS direct MP4 stream URL.'
+      );
       return;
     }
 
@@ -301,7 +339,8 @@ export function UploadHistoryTable({
                           >
                             <Info className="w-4 h-4" />
                           </button>
-                          {job.status === 'WAITING_FOR_AUTHORIZED_MEDIA' && (
+                          {(job.status === 'WAITING_FOR_AUTHORIZED_MEDIA' ||
+                            (job.status === 'FAILED' && !job.drive_file_id)) && (
                             <button
                               type="button"
                               onClick={() => openAttachModal(job)}
@@ -311,7 +350,8 @@ export function UploadHistoryTable({
                               <span>Attach Media</span>
                             </button>
                           )}
-                          {(job.status === 'FAILED' || job.status === 'AMBIGUOUS_UPLOAD') && (
+                          {((job.status === 'FAILED' && Boolean(job.drive_file_id)) ||
+                            job.status === 'AMBIGUOUS_UPLOAD') && (
                             <button
                               type="button"
                               onClick={() => handleRetry(job.id)}
@@ -415,7 +455,8 @@ export function UploadHistoryTable({
                     )}
                   </div>
 
-                  {job.status === 'WAITING_FOR_AUTHORIZED_MEDIA' && (
+                  {(job.status === 'WAITING_FOR_AUTHORIZED_MEDIA' ||
+                    (job.status === 'FAILED' && !job.drive_file_id)) && (
                     <button
                       type="button"
                       onClick={() => openAttachModal(job)}
@@ -425,7 +466,8 @@ export function UploadHistoryTable({
                       <span>Attach Media</span>
                     </button>
                   )}
-                  {(job.status === 'FAILED' || job.status === 'AMBIGUOUS_UPLOAD') && (
+                  {((job.status === 'FAILED' && Boolean(job.drive_file_id)) ||
+                    job.status === 'AMBIGUOUS_UPLOAD') && (
                     <button
                       type="button"
                       onClick={() => handleRetry(job.id)}
@@ -604,7 +646,8 @@ export function UploadHistoryTable({
                   Attach Direct Media &amp; Resume
                 </button>
               )}
-              {(selectedJob.status === 'FAILED' || selectedJob.status === 'AMBIGUOUS_UPLOAD') && (
+              {((selectedJob.status === 'FAILED' && Boolean(selectedJob.drive_file_id)) ||
+                selectedJob.status === 'AMBIGUOUS_UPLOAD') && (
                 <button
                   type="button"
                   onClick={() => {
@@ -666,11 +709,25 @@ export function UploadHistoryTable({
                   type="password"
                   required
                   value={attachDirectUrl}
-                  onChange={(e) => setAttachDirectUrl(e.target.value)}
-                  placeholder="https://...mp4"
+                  onChange={(e) => {
+                    setAttachDirectUrl(e.target.value);
+                    setAttachError(null);
+                  }}
+                  placeholder="https://...fbcdn.net/...mp4"
                   autoComplete="off"
                   className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-amber-500"
                 />
+                {directUrlCheck.status === 'valid' && (
+                  <p className="mt-1.5 text-[11px] text-emerald-400">
+                    Direct media host detected: <span className="font-mono">{directUrlCheck.host}</span>
+                    {directUrlCheck.isMp4Path ? ' (.mp4)' : ''} — query parameters remain masked.
+                  </p>
+                )}
+                {(directUrlCheck.status === 'webpage' || directUrlCheck.status === 'invalid') && (
+                  <p className="mt-1.5 text-[11px] text-rose-400">
+                    {directUrlCheck.message}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -719,7 +776,7 @@ export function UploadHistoryTable({
               </button>
               <button
                 type="submit"
-                disabled={attaching}
+                disabled={attaching || directUrlCheck.status !== 'valid'}
                 className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-semibold disabled:opacity-50"
               >
                 {attaching ? 'Streaming to Drive & YouTube...' : 'Attach & Resume Job'}
