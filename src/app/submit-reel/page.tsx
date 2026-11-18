@@ -46,6 +46,38 @@ export default function SubmitReelPage() {
     return null;
   }, [reelUrl]);
 
+  // Live client-side direct MP4 stream validation (never exposes signed query params)
+  const directUrlAudit = useMemo(() => {
+    const trimmed = directVideoUrl.trim();
+    if (!trimmed) return { status: 'empty' as const };
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol !== 'https:') {
+        return {
+          status: 'invalid' as const,
+          message: 'Creator-authorized direct media URL must use https://.',
+        };
+      }
+      const host = parsed.hostname.toLowerCase();
+      const isMp4Path = parsed.pathname.toLowerCase().endsWith('.mp4');
+      if (
+        (host === 'instagram.com' || host === 'www.instagram.com' || host.endsWith('.instagram.com')) &&
+        !isMp4Path
+      ) {
+        return {
+          status: 'webpage' as const,
+          host,
+          isMp4Path: false,
+          message:
+            'Instagram webpage URL detected (instagram.com/reel/...). Paste the direct Meta CDN .mp4 stream URL instead.',
+        };
+      }
+      return { status: 'valid' as const, host, isMp4Path };
+    } catch {
+      return { status: 'invalid' as const, message: 'Invalid direct media URL format.' };
+    }
+  }, [directVideoUrl]);
+
   const fetchJobs = useCallback(async () => {
     try {
       const res = await fetchJsonWithTimeout<{
@@ -84,23 +116,14 @@ export default function SubmitReelPage() {
     }
 
     const trimmedDirectUrl = directVideoUrl.trim();
-    if (trimmedDirectUrl) {
-      try {
-        const parsed = new URL(trimmedDirectUrl);
-        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-          setSubmissionFeedback({
-            type: 'error',
-            message: 'Creator-authorized direct media URL must use https:// or http://.',
-          });
-          return;
-        }
-      } catch {
-        setSubmissionFeedback({
-          type: 'error',
-          message: 'Invalid direct media URL format.',
-        });
-        return;
-      }
+    if (trimmedDirectUrl && directUrlAudit.status !== 'valid') {
+      setSubmissionFeedback({
+        type: 'error',
+        message:
+          directUrlAudit.message ||
+          'Creator-authorized direct media URL must be a valid HTTPS direct MP4 stream.',
+      });
+      return;
     }
 
     if (!confirmedRights) {
@@ -132,7 +155,7 @@ export default function SubmitReelPage() {
             sandbox: useSandbox,
           }),
         },
-        20000
+        120000
       );
 
       if (res.ok && res.data?.success) {
@@ -162,7 +185,7 @@ export default function SubmitReelPage() {
     const res = await fetchJsonWithTimeout<{ success: boolean; error?: string }>(
       `/api/uploads/${jobId}/retry`,
       { method: 'POST' },
-      20000
+      120000
     );
     if (res.ok && res.data?.success) {
       setSubmissionFeedback({
@@ -257,19 +280,31 @@ export default function SubmitReelPage() {
             <div className="space-y-1.5">
               <div className="flex items-center justify-between gap-2">
                 <label className="text-xs font-semibold text-zinc-300">
-                  Creator-Authorized Direct Video Stream / CDN Link <span className="text-zinc-500 font-normal">(Optional)</span>
+                  Creator-Authorized Direct Video Stream / CDN Link (Masked) <span className="text-zinc-500 font-normal">(Optional)</span>
                 </label>
                 <span className="text-[11px] text-zinc-400">Authorized MP4 / CDN origin</span>
               </div>
               <input
-                type="url"
-                placeholder="https://creator-storage.example.com/video.mp4 (Optional direct MP4 link)"
+                type="password"
+                autoComplete="off"
+                placeholder="https://...fbcdn.net/...mp4 (Masked direct MP4 stream link)"
                 value={directVideoUrl}
                 onChange={(e) => setDirectVideoUrl(e.target.value)}
                 className="w-full bg-zinc-950 border border-zinc-700/80 rounded-xl px-4 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-rose-500/50 focus:border-rose-500 transition"
               />
+              {directUrlAudit.status === 'valid' && (
+                <p className="text-[11px] text-emerald-400">
+                  Direct media host detected: <span className="font-mono">{directUrlAudit.host}</span>
+                  {directUrlAudit.isMp4Path ? ' (.mp4)' : ''} — signed query parameters remain masked.
+                </p>
+              )}
+              {(directUrlAudit.status === 'webpage' || directUrlAudit.status === 'invalid') && (
+                <p className="text-[11px] text-rose-400">
+                  {directUrlAudit.message}
+                </p>
+              )}
               <p className="text-[11px] text-zinc-400 leading-relaxed">
-                If unauthenticated Instagram blocks video binary retrieval, supplying an authorized MP4 or Drive source ensures immediate automated publication.
+                Signed CDN URLs are masked on screen and never stored in the database. Supplying an authorized direct `.mp4` stream enables Cloudflare-native streaming to Drive and YouTube.
               </p>
             </div>
 

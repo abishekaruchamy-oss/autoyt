@@ -435,10 +435,15 @@ export class PipelineService {
     let currentSessionUri: string | undefined = undefined;
 
     try {
+      const extractHandleFromText = (text?: string | null): string | null => {
+        if (!text) return null;
+        const m = text.match(/@([A-Za-z0-9_.]{1,30})/);
+        return m ? m[1] : null;
+      };
       const authorUsername =
-        options?.captionOverride?.includes('@zackdfilms') || job.caption?.includes('@zackdfilms')
-          ? 'zackdfilms'
-          : (job.account_username && job.account_username !== 'creator' ? job.account_username : 'zackdfilms');
+        extractHandleFromText(options?.captionOverride) ||
+        extractHandleFromText(job.caption) ||
+        (job.account_username && job.account_username !== 'creator' ? job.account_username : 'creator');
 
       const targetCaption = options?.captionOverride || job.caption;
       const targetVisibility = options?.visibility || automation.default_visibility || 'public';
@@ -703,10 +708,35 @@ export class PipelineService {
       }
     }
 
+    // 3b. Reject Instagram webpage URLs supplied as directVideoUrl
+    if (payload.directVideoUrl) {
+      try {
+        const parsedDirect = new URL(payload.directVideoUrl);
+        const directHost = parsedDirect.hostname.toLowerCase();
+        if (
+          (directHost === 'instagram.com' ||
+            directHost === 'www.instagram.com' ||
+            directHost.endsWith('.instagram.com')) &&
+          !parsedDirect.pathname.toLowerCase().endsWith('.mp4')
+        ) {
+          throw new Error(
+            'Direct MP4 stream URL cannot be an instagram.com webpage URL. Provide a verified direct CDN .mp4 stream URL.'
+          );
+        }
+      } catch (urlErr) {
+        if (urlErr instanceof Error && urlErr.message.includes('Direct MP4 stream URL')) {
+          throw urlErr;
+        }
+      }
+    }
+
     // 4. Create initial job record in SUBMITTED state (reusing existing job if in pending/waiting/failed state to prevent duplicates)
-    const authorUsername = payload.captionOverride?.includes('@zackdfilms')
-      ? 'zackdfilms'
-      : (existing?.account_username && existing.account_username !== 'creator' ? existing.account_username : 'zackdfilms');
+    const handleMatch = payload.captionOverride?.match(/@([A-Za-z0-9_.]{1,30})/);
+    const authorUsername =
+      (handleMatch ? handleMatch[1] : null) ||
+      (existing?.account_username && existing.account_username !== 'creator'
+        ? existing.account_username
+        : 'creator');
 
     let job: UploadJob;
     if (existing) {
