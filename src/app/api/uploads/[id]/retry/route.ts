@@ -5,6 +5,7 @@ import { Repository } from '@/server/db/repository';
 import { PipelineService } from '@/server/services/pipelineService';
 import { isGoogleConnected } from '@/server/services/googleAuthService';
 import { isValidPublicMediaUrl } from '@/server/media/MediaResolver';
+import { redactMediaUrl } from '@/server/media/streamValidation';
 
 export async function POST(
   request: NextRequest,
@@ -43,6 +44,17 @@ export async function POST(
           { status: 400, headers: NO_STORE_HEADERS }
         );
       }
+      await Repository.logActivity(
+        'JOB_RETRIED',
+        `Authorized direct media stream attached to existing job ${id} (${existingJob.shortcode || existingJob.reel_id})`,
+        existingJob.account_username,
+        {
+          jobId: id,
+          shortcode: existingJob.shortcode || null,
+          mediaSource: redactMediaUrl(body.directVideoUrl),
+          visibility: body.visibility || 'public',
+        }
+      );
     }
 
     const connected = await isGoogleConnected();

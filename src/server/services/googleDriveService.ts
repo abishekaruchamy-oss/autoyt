@@ -1,3 +1,9 @@
+import {
+  isPermittedVideoContentType,
+  probeUpstreamVideoStream,
+  redactMediaUrl,
+} from '../media/streamValidation';
+
 export interface DriveUploadResult {
   fileId: string;
   name: string;
@@ -283,14 +289,8 @@ export class GoogleDriveService {
       };
     }
 
-    // 2. Fetch video headers to obtain total content length
-    const headRes = await fetch(sourceVideoUrl, { method: 'HEAD' });
-    const contentLength = headRes.headers.get('content-length');
-    const totalBytes = contentLength ? parseInt(contentLength, 10) : 0;
-
-    if (!totalBytes || totalBytes <= 0) {
-      throw new Error('Source video Content-Length is missing or zero.');
-    }
+    // 2. Validate upstream status, Content-Type, Content-Length/Range, and size limit
+    const { totalBytes } = await probeUpstreamVideoStream(sourceVideoUrl);
 
     // 3. Initiate resumable session
     const sessionUri = await this.initiateResumableUpload(
@@ -305,7 +305,15 @@ export class GoogleDriveService {
     // 4. Stream response and upload in 5MB chunks (or full stream if small)
     const videoStreamRes = await fetch(sourceVideoUrl);
     if (!videoStreamRes.ok || !videoStreamRes.body) {
-      throw new Error(`Failed to fetch source video stream: HTTP ${videoStreamRes.status}`);
+      throw new Error(
+        `Failed to fetch source video stream (HTTP ${videoStreamRes.status}) for ${redactMediaUrl(sourceVideoUrl)}`
+      );
+    }
+    const streamContentType = videoStreamRes.headers.get('content-type');
+    if (!isPermittedVideoContentType(streamContentType)) {
+      throw new Error(
+        `Unexpected upstream stream Content-Type "${streamContentType}" for ${redactMediaUrl(sourceVideoUrl)}`
+      );
     }
 
     // Stream consumption into chunks to avoid high memory spikes

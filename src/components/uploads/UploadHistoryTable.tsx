@@ -33,6 +33,56 @@ export function UploadHistoryTable({
   const [accountFilter, setAccountFilter] = useState<string>('ALL');
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const [selectedJob, setSelectedJob] = useState<UploadJob | null>(null);
+  const [attachJob, setAttachJob] = useState<UploadJob | null>(null);
+  const [attachDirectUrl, setAttachDirectUrl] = useState('');
+  const [attachCaption, setAttachCaption] = useState('');
+  const [attachVisibility, setAttachVisibility] = useState<'public' | 'unlisted' | 'private'>('public');
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const [attaching, setAttaching] = useState(false);
+
+  const openAttachModal = (job: UploadJob) => {
+    setAttachJob(job);
+    setAttachDirectUrl('');
+    setAttachCaption(job.caption || '');
+    setAttachVisibility('public');
+    setAttachError(null);
+  };
+
+  const handleAttachAndResume = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!attachJob) return;
+    const trimmedUrl = attachDirectUrl.trim();
+    if (!trimmedUrl) {
+      setAttachError('Please provide a creator-authorized HTTPS direct MP4 stream URL.');
+      return;
+    }
+
+    try {
+      setAttaching(true);
+      setAttachError(null);
+      const res = await authFetch(`/api/uploads/${attachJob.id}/retry`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          directVideoUrl: trimmedUrl,
+          captionOverride: attachCaption.trim() || undefined,
+          visibility: attachVisibility,
+        }),
+      });
+      const data = (await res.json()) as { success: boolean; error?: string };
+      if (data.success) {
+        setAttachJob(null);
+        setAttachDirectUrl('');
+        onJobRetried();
+      } else {
+        setAttachError(data.error || 'Failed to resume job with attached media stream.');
+      }
+    } catch {
+      setAttachError('Network error resuming job.');
+    } finally {
+      setAttaching(false);
+    }
+  };
 
   const filteredJobs = jobs.filter((job) => {
     if (statusFilter !== 'ALL' && job.status !== statusFilter) return false;
@@ -106,7 +156,8 @@ export function UploadHistoryTable({
             <option value="ALL">All Statuses</option>
             <option value="COMPLETED">Live on Shorts</option>
             <option value="UPLOADING_YOUTUBE">Uploading YouTube</option>
-            <option value="STORED_DRIVE">Saved to Drive</option>
+            <option value="STORED_IN_DRIVE">Saved to Drive</option>
+            <option value="WAITING_FOR_AUTHORIZED_MEDIA">Waiting for Media</option>
             <option value="FAILED">Failed</option>
             <option value="RETRYING">Retrying</option>
           </select>
@@ -250,6 +301,16 @@ export function UploadHistoryTable({
                           >
                             <Info className="w-4 h-4" />
                           </button>
+                          {job.status === 'WAITING_FOR_AUTHORIZED_MEDIA' && (
+                            <button
+                              type="button"
+                              onClick={() => openAttachModal(job)}
+                              className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
+                            >
+                              <UploadCloud className="w-3 h-3" />
+                              <span>Attach Media</span>
+                            </button>
+                          )}
                           {(job.status === 'FAILED' || job.status === 'AMBIGUOUS_UPLOAD') && (
                             <button
                               type="button"
@@ -354,6 +415,16 @@ export function UploadHistoryTable({
                     )}
                   </div>
 
+                  {job.status === 'WAITING_FOR_AUTHORIZED_MEDIA' && (
+                    <button
+                      type="button"
+                      onClick={() => openAttachModal(job)}
+                      className="px-3 py-1 bg-amber-600 text-white rounded-lg text-xs font-semibold flex items-center gap-1 shadow-sm"
+                    >
+                      <UploadCloud className="w-3 h-3" />
+                      <span>Attach Media</span>
+                    </button>
+                  )}
                   {(job.status === 'FAILED' || job.status === 'AMBIGUOUS_UPLOAD') && (
                     <button
                       type="button"
@@ -519,6 +590,20 @@ export function UploadHistoryTable({
             </div>
 
             <div className="pt-2 border-t border-zinc-800 flex items-center justify-end gap-2">
+              {(selectedJob.status === 'WAITING_FOR_AUTHORIZED_MEDIA' ||
+                (selectedJob.status === 'FAILED' && !selectedJob.drive_file_id)) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = selectedJob;
+                    setSelectedJob(null);
+                    openAttachModal(target);
+                  }}
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-semibold"
+                >
+                  Attach Direct Media &amp; Resume
+                </button>
+              )}
               {(selectedJob.status === 'FAILED' || selectedJob.status === 'AMBIGUOUS_UPLOAD') && (
                 <button
                   type="button"
@@ -541,6 +626,106 @@ export function UploadHistoryTable({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Attach Authorized Media & Resume Existing Job Modal */}
+      {attachJob && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <form
+            onSubmit={handleAttachAndResume}
+            className="bg-zinc-950 border border-zinc-800 rounded-3xl w-full max-w-lg p-6 shadow-2xl relative space-y-4 my-auto"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-white">Attach Authorized Media &amp; Resume</h3>
+                <span className="text-[11px] font-mono text-zinc-400">
+                  Existing Job: {attachJob.id} ({attachJob.shortcode || attachJob.reel_id})
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAttachJob(null)}
+                className="text-zinc-400 hover:text-white p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-zinc-400 leading-relaxed">
+              Attach a verified HTTPS direct MP4 stream to resume this exact job without creating a duplicate record.
+              The URL is masked in the UI and never persisted in the database.
+            </p>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block text-zinc-300 font-semibold mb-1">
+                  Creator-Authorized Direct MP4 Stream URL (Masked)
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={attachDirectUrl}
+                  onChange={(e) => setAttachDirectUrl(e.target.value)}
+                  placeholder="https://...mp4"
+                  autoComplete="off"
+                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-zinc-300 font-semibold mb-1">
+                  YouTube Shorts Caption / Title
+                </label>
+                <input
+                  type="text"
+                  value={attachCaption}
+                  onChange={(e) => setAttachCaption(e.target.value)}
+                  placeholder="Caption | Credit: @creator"
+                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-zinc-300 font-semibold mb-1">
+                  YouTube Publishing Visibility
+                </label>
+                <select
+                  value={attachVisibility}
+                  onChange={(e) => setAttachVisibility(e.target.value as 'public' | 'unlisted' | 'private')}
+                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                >
+                  <option value="public">Public (Default)</option>
+                  <option value="unlisted">Unlisted</option>
+                  <option value="private">Private</option>
+                </select>
+              </div>
+
+              {attachError && (
+                <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-[11px]">
+                  {attachError}
+                </div>
+              )}
+            </div>
+
+            <div className="pt-2 border-t border-zinc-800 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={attaching}
+                onClick={() => setAttachJob(null)}
+                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl text-xs font-semibold disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={attaching}
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-semibold disabled:opacity-50"
+              >
+                {attaching ? 'Streaming to Drive & YouTube...' : 'Attach & Resume Job'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>

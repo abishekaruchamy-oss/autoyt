@@ -1,4 +1,9 @@
 import { formatCaptionForYouTube } from '../monitoring/adapter';
+import {
+  isPermittedVideoContentType,
+  probeUpstreamVideoStream,
+  redactMediaUrl,
+} from '../media/streamValidation';
 
 export interface YouTubeUploadMetadata {
   caption: string;
@@ -206,17 +211,11 @@ export class YouTubeService {
       onSessionInitiated?: (sessionUri: string) => Promise<void> | void;
     }
   ): Promise<YouTubeUploadResult> {
-    // 1. Fetch source video Content-Length with optional sourceHeaders (e.g. Google Drive auth)
-    const headRes = await fetch(sourceVideoUrl, {
-      method: 'HEAD',
-      headers: options?.sourceHeaders,
-    });
-    const contentLength = headRes.headers.get('content-length');
-    const totalBytes = contentLength ? parseInt(contentLength, 10) : 0;
-
-    if (!totalBytes || totalBytes <= 0) {
-      throw new Error('Source video Content-Length is missing or zero.');
-    }
+    // 1. Validate upstream status, Content-Type, Content-Length/Range, and max media ceiling
+    const { totalBytes } = await probeUpstreamVideoStream(
+      sourceVideoUrl,
+      options?.sourceHeaders
+    );
 
     // 2. Obtain or initiate resumable upload session
     let sessionUri = options?.sessionUri;
@@ -262,7 +261,15 @@ export class YouTubeService {
       headers: options?.sourceHeaders,
     });
     if (!streamRes.ok || !streamRes.body) {
-      throw new Error(`Failed to fetch source video stream: HTTP ${streamRes.status}`);
+      throw new Error(
+        `Failed to fetch source video stream (HTTP ${streamRes.status}) for ${redactMediaUrl(sourceVideoUrl)}`
+      );
+    }
+    const streamContentType = streamRes.headers.get('content-type');
+    if (!isPermittedVideoContentType(streamContentType)) {
+      throw new Error(
+        `Unexpected upstream stream Content-Type "${streamContentType}" for ${redactMediaUrl(sourceVideoUrl)}`
+      );
     }
 
     const reader = streamRes.body.getReader();
