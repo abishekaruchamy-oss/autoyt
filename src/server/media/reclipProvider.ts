@@ -19,17 +19,29 @@ import { IMediaProvider, MediaResolutionResult } from './MediaResolver';
  * Safely loads execFile only in Node.js runtime without breaking Cloudflare Worker bundlers.
  */
 async function getExecFile(): Promise<any> {
-  if (typeof process === 'undefined' || !process.versions?.node) {
+  // Cloudflare Workers / Edge runtime check
+  if (
+    typeof (globalThis as any).WebSocketPair !== 'undefined' ||
+    Boolean(process.env.CF_PAGES) ||
+    Boolean(process.env.CLOUDFLARE_WORKER) ||
+    typeof process === 'undefined' ||
+    !process.versions?.node
+  ) {
     throw new Error(
-      'Local yt-dlp CLI is only supported in Node.js container/CLI runtimes. In Cloudflare Workers, please set RECLIP_SERVICE_URL to connect to your remote media worker.'
+      'Serverless runtime environment (Cloudflare Workers) does not support native subprocess execution. Please provide a creator-authorized direct media link or original video file.'
     );
   }
   try {
     const moduleName = 'child_process';
     const cp = await import(/* webpackIgnore: true */ moduleName);
+    if (!cp || typeof cp.execFile !== 'function') {
+      throw new Error('child_process.execFile is unavailable in this environment.');
+    }
     return cp.execFile;
-  } catch (e) {
-    throw new Error(`Failed to load child_process: ${(e as Error).message}`);
+  } catch {
+    throw new Error(
+      'Serverless runtime environment (Cloudflare Workers) does not support native subprocess execution. Please provide a creator-authorized direct media link or original video file.'
+    );
   }
 }
 

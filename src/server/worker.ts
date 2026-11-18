@@ -430,7 +430,7 @@ export default {
             directVideoUrl: body.directVideoUrl,
             driveFileId: body.driveFileId,
             captionOverride: body.captionOverride,
-            visibility: body.visibility || 'private',
+            visibility: body.visibility || 'public',
             confirmedRights: Boolean(body.confirmedRights),
           },
           { sandbox: Boolean(body.sandbox) }
@@ -441,6 +441,39 @@ export default {
             success: true,
             message: `Reel processed. Status: ${job.status}`,
             job: sanitizeUploadJobForApi(job),
+          }),
+          { status: 200, headers: jsonHeaders }
+        );
+      }
+
+      // 9. Upload Job Retry
+      const retryMatch = path.match(/^\/api\/uploads\/([^/]+)\/retry$/);
+      if (retryMatch && method === 'POST') {
+        const authFailure = requireWorkerAdmin();
+        if (authFailure) return authFailure;
+        const jobId = retryMatch[1];
+        let body: any = {};
+        try {
+          body = await request.json();
+        } catch {
+          // Empty body acceptable
+        }
+        if (body.directVideoUrl) {
+          const { isValidPublicMediaUrl } = await import('./media/MediaResolver');
+          const urlCheck = isValidPublicMediaUrl(body.directVideoUrl);
+          if (!urlCheck.isValid) {
+            return new Response(
+              JSON.stringify({ success: false, error: `Invalid media URL: ${urlCheck.error}` }),
+              { status: 400, headers: jsonHeaders }
+            );
+          }
+        }
+        const completedJob = await PipelineService.retryJob(jobId, body);
+        return new Response(
+          JSON.stringify({
+            success: true,
+            message: `Job ${jobId} retried successfully.`,
+            job: sanitizeUploadJobForApi(completedJob),
           }),
           { status: 200, headers: jsonHeaders }
         );

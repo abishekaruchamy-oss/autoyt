@@ -401,7 +401,14 @@ export class PipelineService {
   /**
    * Retries an existing upload job from its current point of failure
    */
-  static async retryJob(jobId: string): Promise<UploadJob> {
+  static async retryJob(
+    jobId: string,
+    options?: {
+      directVideoUrl?: string;
+      captionOverride?: string;
+      visibility?: 'public' | 'unlisted' | 'private';
+    }
+  ): Promise<UploadJob> {
     const job = await Repository.getUploadJobById(jobId);
     if (!job) {
       throw new Error(`Upload job ${jobId} not found.`);
@@ -428,9 +435,20 @@ export class PipelineService {
     let currentSessionUri: string | undefined = undefined;
 
     try {
+      const authorUsername =
+        options?.captionOverride?.includes('@zackdfilms') || job.caption?.includes('@zackdfilms')
+          ? 'zackdfilms'
+          : (job.account_username && job.account_username !== 'creator' ? job.account_username : 'zackdfilms');
+
+      const targetCaption = options?.captionOverride || job.caption;
+      const targetVisibility = options?.visibility || automation.default_visibility || 'public';
+
       await Repository.updateUploadJob(jobId, {
         status: 'RETRYING',
         retry_count: job.retry_count + 1,
+        caption: targetCaption,
+        account_username: authorUsername,
+        media_source_type: options?.directVideoUrl ? 'USER_DIRECT_STREAM' : job.media_source_type,
         error_details: null,
       });
 
@@ -439,7 +457,7 @@ export class PipelineService {
       if (job.encrypted_youtube_upload_session_uri) {
         try {
           currentSessionUri = decryptToken(job.encrypted_youtube_upload_session_uri);
-        } catch (decryptErr) {
+        } catch {
           console.warn(`[Retry] Failed to decrypt session URI for job ${jobId}; discarding invalid session.`);
         }
       }
@@ -471,7 +489,7 @@ export class PipelineService {
               await Repository.logActivity(
                 'YOUTUBE_UPLOAD',
                 `Reconciled and published YouTube Short: "${resumableStatus.videoId}" (no re-upload required)`,
-                job.account_username,
+                authorUsername,
                 { videoId: resumableStatus.videoId }
               );
               return completedJob!;
@@ -492,35 +510,68 @@ export class PipelineService {
         sourceHeaders = GoogleDriveService.getAuthHeaders(driveToken);
       } else {
         // Need to archive to Drive first
+        let sourceUrlToArchive = job.original_reel_url;
+
+        if (options?.directVideoUrl) {
+          const resolution = await MediaResolver.resolveReel(job.original_reel_url, {
+            directVideoUrl: options.directVideoUrl,
+            confirmedRights: true,
+            caption: targetCaption,
+            username: authorUsername,
+          });
+          if (!resolution.success || !resolution.mediaUrl) {
+            throw new Error(resolution.reason || 'Failed to resolve provided direct video URL.');
+          }
+          sourceUrlToArchive = resolution.mediaUrl;
+        }
+
         const folderId = await GoogleDriveService.getOrCreateFolder(
           automation.drive_folder_name,
           driveToken
         );
-        const fileName = `reel_${job.reel_id}_${job.account_username}.mp4`;
+        const fileShortcode = job.shortcode || job.reel_id.replace(/^reel_/, '');
+        const fileName = `reel_${fileShortcode}_${authorUsername}.mp4`;
+
+        await Repository.updateUploadJob(jobId, { status: 'ARCHIVING_TO_DRIVE' });
         const driveRes = await GoogleDriveService.streamVideoToDrive(
-          job.original_reel_url,
+          sourceUrlToArchive,
           fileName,
           folderId,
           driveToken
         );
         await Repository.updateUploadJob(jobId, {
           drive_file_id: driveRes.fileId,
-          drive_file_url: driveRes.webViewLink,
-          status: 'STORED_DRIVE',
+          drive_file_url: driveRes.webViewLink || `https://drive.google.com/file/d/${driveRes.fileId}/view`,
+          status: 'STORED_IN_DRIVE',
+          account_username: authorUsername,
+          caption: targetCaption,
+          media_source_type: options?.directVideoUrl ? 'USER_DIRECT_STREAM' : job.media_source_type,
         });
-        videoSourceUrl = GoogleDriveService.getMediaDownloadUrl(driveRes.fileId);
-        sourceHeaders = GoogleDriveService.getAuthHeaders(driveToken);
+
+        await Repository.logActivity(
+          'DRIVE_UPLOAD',
+          `Archived Reel #${fileShortcode} to Google Drive folder "${automation.drive_folder_name}"`,
+          authorUsername,
+          { fileId: driveRes.fileId, fileName }
+        );
+
+        videoSourceUrl = sourceUrlToArchive.startsWith('http') && !sourceUrlToArchive.includes('drive.google.com')
+          ? sourceUrlToArchive
+          : GoogleDriveService.getMediaDownloadUrl(driveRes.fileId);
+        sourceHeaders = sourceUrlToArchive === videoSourceUrl
+          ? undefined
+          : GoogleDriveService.getAuthHeaders(driveToken);
       }
 
-      // 3. Upload to YouTube using authenticated Drive stream & session tracking
+      // 3. Upload to YouTube using authenticated stream & session tracking
       await Repository.updateUploadJob(jobId, { status: 'UPLOADING_TO_YOUTUBE' });
 
       const ytResult = await YouTubeService.streamVideoToYouTube(
         videoSourceUrl,
         {
-          caption: job.caption,
-          username: job.account_username,
-          privacyStatus: automation.default_visibility,
+          caption: targetCaption,
+          username: authorUsername,
+          privacyStatus: targetVisibility,
         },
         youtubeToken,
         {
@@ -536,6 +587,8 @@ export class PipelineService {
         }
       );
 
+      await Repository.updateUploadJob(jobId, { status: 'VERIFYING_UPLOAD' });
+
       const finalSession = ytResult.sessionUri || currentSessionUri;
       const finalJob = await Repository.updateUploadJob(jobId, {
         status: 'COMPLETED',
@@ -547,12 +600,13 @@ export class PipelineService {
       });
 
       await Repository.recordReel(job.reel_id, job.instagram_account_id, job.original_reel_url);
+      ReelDeduplicationStore.recordReel(job.reel_id);
 
       await Repository.logActivity(
         'YOUTUBE_UPLOAD',
         `Published YouTube Short: "${ytResult.title}"`,
-        job.account_username,
-        { videoId: ytResult.videoId, videoUrl: ytResult.videoUrl, visibility: automation.default_visibility }
+        authorUsername,
+        { videoId: ytResult.videoId, videoUrl: ytResult.videoUrl, visibility: targetVisibility }
       );
 
       return finalJob!;
@@ -608,7 +662,6 @@ export class PipelineService {
 
     // 3. Deduplication Check
     const existing = await Repository.getUploadJobByShortcode(shortcode);
-    const isRecorded = await Repository.isReelRecorded(`reel_${shortcode}`);
 
     if (existing) {
       if (
@@ -616,10 +669,15 @@ export class PipelineService {
         existing.status === 'STORED_IN_DRIVE' ||
         existing.status === 'ARCHIVING_TO_DRIVE' ||
         existing.status === 'UPLOADING_TO_YOUTUBE' ||
-        existing.youtube_video_id ||
-        isRecorded
+        existing.youtube_video_id
       ) {
         return existing;
+      }
+    } else {
+      const isRecorded = await Repository.isReelRecorded(`reel_${shortcode}`);
+      if (isRecorded) {
+        const pastJob = await Repository.getUploadJobByReelId(`reel_${shortcode}`);
+        if (pastJob) return pastJob;
       }
     }
 

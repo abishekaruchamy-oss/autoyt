@@ -4,6 +4,7 @@ import { NO_STORE_HEADERS, sanitizeErrorMessage, sanitizeUploadJobForApi } from 
 import { Repository } from '@/server/db/repository';
 import { PipelineService } from '@/server/services/pipelineService';
 import { isGoogleConnected } from '@/server/services/googleAuthService';
+import { isValidPublicMediaUrl } from '@/server/media/MediaResolver';
 
 export async function POST(
   request: NextRequest,
@@ -22,10 +23,32 @@ export async function POST(
       );
     }
 
+    let body: {
+      directVideoUrl?: string;
+      captionOverride?: string;
+      visibility?: 'public' | 'unlisted' | 'private';
+    } = {};
+
+    try {
+      body = (await request.json()) as typeof body;
+    } catch {
+      // Empty body is acceptable for standard retry
+    }
+
+    if (body.directVideoUrl) {
+      const urlCheck = isValidPublicMediaUrl(body.directVideoUrl);
+      if (!urlCheck.isValid) {
+        return NextResponse.json(
+          { success: false, error: `Invalid media URL: ${urlCheck.error}` },
+          { status: 400, headers: NO_STORE_HEADERS }
+        );
+      }
+    }
+
     const connected = await isGoogleConnected();
-    if (connected && existingJob.original_reel_url?.startsWith('http')) {
+    if (connected && (existingJob.original_reel_url?.startsWith('http') || body.directVideoUrl)) {
       try {
-        const completedJob = await PipelineService.retryJob(id);
+        const completedJob = await PipelineService.retryJob(id, body);
         return NextResponse.json(
           {
             success: true,

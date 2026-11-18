@@ -467,19 +467,23 @@ export class StandardPublicProbeProvider implements IMediaProvider {
 export class SandboxTestProvider implements IMediaProvider {
   readonly providerName = 'SANDBOX';
 
-  canResolve(url: string, options?: { sandbox?: boolean }): boolean {
-    return Boolean(options?.sandbox);
+  canResolve(url: string, options?: { sandbox?: boolean; directVideoUrl?: string }): boolean {
+    return Boolean(options?.sandbox && !options?.directVideoUrl);
   }
 
-  async resolve(url: string, shortcode: string): Promise<MediaResolutionResult> {
+  async resolve(
+    url: string,
+    shortcode: string,
+    options?: { username?: string; caption?: string }
+  ): Promise<MediaResolutionResult> {
     return {
       success: true,
       shortcode,
       canonicalUrl: `https://www.instagram.com/reel/${shortcode}/`,
       provider: 'SANDBOX',
       mediaUrl: 'https://example.com/test_video.mp4',
-      caption: `🔥 Amazing Tech Workflow #${shortcode}! Must watch. #shorts #tech #developer`,
-      username: 'tech_creator_official',
+      caption: options?.caption || `🔥 Amazing Tech Workflow #${shortcode}! Must watch. #shorts #tech #developer`,
+      username: options?.username || 'tech_creator_official',
       thumbnailUrl: 'https://images.unsplash.com/photo-1527443224154-c4a3942d3acf?w=400',
       status: 'MEDIA_AVAILABLE',
       reason: 'Sandbox authorized test fixture resolved.',
