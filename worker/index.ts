@@ -66,6 +66,64 @@ export default {
    */
   async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext): Promise<Response> {
     applyWorkerEnv(env);
+
+    const url = new URL(request.url);
+
+    // Acceptance Test Execution Endpoint (Cloudflare Worker Native)
+    if (url.pathname === '/api/acceptance/execute-phase11' && request.method === 'POST') {
+      const jobId = '6db7e23e-17aa-45db-b41f-3e1354565f34';
+      console.log(`[Phase 11 Acceptance] Starting real execution for job ${jobId}...`);
+
+      const executionPromise = (async () => {
+        try {
+          const res = await PipelineService.retryJob(jobId);
+          console.log(`[Phase 11 Acceptance] Success: ${res.id} status=${res.status} yt=${res.youtube_video_id}`);
+          return res;
+        } catch (err) {
+          console.error(`[Phase 11 Acceptance] Error:`, err);
+          throw err;
+        }
+      })();
+
+      ctx.waitUntil(executionPromise);
+
+      const timeoutPromise = new Promise<{ timeout: true }>((resolve) =>
+        setTimeout(() => resolve({ timeout: true }), 25000)
+      );
+
+      try {
+        const raceResult = await Promise.race([executionPromise, timeoutPromise]);
+        if ('timeout' in raceResult) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              message: `Job ${jobId} execution running in background via ctx.waitUntil.`,
+              status: 'PROCESSING',
+            }),
+            { status: 202, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            message: `Job ${jobId} completed.`,
+            job: raceResult,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      } catch (execErr) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: (execErr as Error).message,
+            stack: (execErr as Error).stack,
+          }),
+          { status: 500, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
     return (openNextHandler as any).fetch(request, env, ctx);
   },
 
