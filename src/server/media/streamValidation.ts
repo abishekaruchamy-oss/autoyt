@@ -275,3 +275,69 @@ export async function probeUpstreamVideoStream(
     status: headRes.status,
   };
 }
+
+/**
+ * Validates whether an upstream media URL is well-formed, uses http/https,
+ * and does not point to internal, private, loopback, or cloud-metadata IPs (SSRF protection).
+ */
+export function isValidPublicMediaUrl(
+  inputUrl?: string,
+  options?: { allowLocalhost?: boolean }
+): { isValid: boolean; error?: string } {
+  if (!inputUrl || typeof inputUrl !== 'string') {
+    return { isValid: false, error: 'Direct media URL is empty' };
+  }
+
+  try {
+    const parsed = new URL(inputUrl);
+    // Protocol must be https: or http:
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return { isValid: false, error: `Invalid protocol: "${parsed.protocol}". Must be https://` };
+    }
+
+    const host = parsed.hostname.toLowerCase();
+
+    // Allow loopback only in explicit test environments
+    const allowLocal =
+      options?.allowLocalhost ||
+      process.env.NODE_ENV === 'test' ||
+      Boolean(process.env.AUTOSHORTS_TEST_MODE);
+    if (allowLocal && (host === 'localhost' || host === '127.0.0.1')) {
+      return { isValid: true };
+    }
+
+    // Block loopback and internal hostnames
+    if (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '0.0.0.0' ||
+      host === '::1' ||
+      host === '[::1]' ||
+      host.endsWith('.local') ||
+      host.endsWith('.internal')
+    ) {
+      return { isValid: false, error: `Internal loopback host "${host}" is not permitted.` };
+    }
+
+    // Block AWS/GCP/Azure link-local cloud metadata endpoints (169.254.169.254)
+    if (host.startsWith('169.254.') || host === 'metadata.google.internal') {
+      return { isValid: false, error: 'Cloud metadata service access is forbidden.' };
+    }
+
+    // Block private RFC 1918 IPv4 ranges
+    if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) {
+      return { isValid: false, error: 'Private class A IP address is not permitted.' };
+    }
+    if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(host)) {
+      return { isValid: false, error: 'Private class B IP address is not permitted.' };
+    }
+    if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(host)) {
+      return { isValid: false, error: 'Private class C IP address is not permitted.' };
+    }
+
+    return { isValid: true };
+  } catch {
+    return { isValid: false, error: 'Invalid URL format' };
+  }
+}
+

@@ -4,10 +4,10 @@
  */
 
 import type { IMediaProvider, MediaResolutionResult } from './MediaResolver';
-import { isValidPublicMediaUrl } from './MediaResolver';
 import {
   extractSignedUrlExpiryIso,
   isInstagramWebpageUrl,
+  isValidPublicMediaUrl,
   redactMediaUrl,
 } from './streamValidation';
 
