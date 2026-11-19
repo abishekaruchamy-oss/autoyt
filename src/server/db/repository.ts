@@ -11,6 +11,7 @@ import {
   ActivityEventType,
   GoogleOAuthService,
   StoredGoogleServiceCredentials,
+  OperatorRightsDeclaration,
 } from '@/types';
 import {
   createInitialMonitoredProfiles,
@@ -76,6 +77,7 @@ class DataStore {
   googleServiceCredentials: Map<'drive' | 'youtube', StoredGoogleServiceCredentials> = new Map();
   oauthStates: Map<string, OAuthStateRecord> = new Map();
   recordedReels: Set<string> = new Set();
+  rightsDeclaration: OperatorRightsDeclaration | null = null;
 
   reset() {
     this.profiles = createInitialMonitoredProfiles();
@@ -88,6 +90,7 @@ class DataStore {
     this.googleServiceCredentials.clear();
     this.oauthStates.clear();
     this.recordedReels.clear();
+    this.rightsDeclaration = null;
   }
 }
 
@@ -928,6 +931,17 @@ export class Repository {
       shortcode: r.shortcode,
       rights_confirmed: Boolean(r.rights_confirmed),
       media_source_type: r.media_source_type,
+      resolved_provider: r.resolved_provider ?? null,
+      media_duration_seconds:
+        r.media_duration_seconds !== undefined && r.media_duration_seconds !== null
+          ? Number(r.media_duration_seconds)
+          : null,
+      media_size_bytes:
+        r.media_size_bytes !== undefined && r.media_size_bytes !== null
+          ? Number(r.media_size_bytes)
+          : null,
+      youtube_privacy_status: r.youtube_privacy_status ?? null,
+      stage_retries_json: r.stage_retries_json ?? null,
       created_at: r.created_at,
       updated_at: r.updated_at,
     };
@@ -1323,32 +1337,72 @@ export class Repository {
 
     const d1 = getD1Database();
     if (d1) {
-      await d1
-        .prepare(`
-          UPDATE upload_jobs
-          SET caption = ?, thumbnail_url = ?, status = ?, drive_file_id = ?,
-              drive_file_url = ?, youtube_video_id = ?, youtube_video_url = ?,
-              encrypted_youtube_upload_session_uri = ?, error_details = ?, retry_count = ?,
-              completed_at = ?, account_username = ?, updated_at = ?
-          WHERE id = ?
-        `)
-        .bind(
-          updated.caption,
-          updated.thumbnail_url,
-          updated.status,
-          updated.drive_file_id,
-          updated.drive_file_url,
-          updated.youtube_video_id,
-          updated.youtube_video_url,
-          updated.encrypted_youtube_upload_session_uri || null,
-          updated.error_details,
-          updated.retry_count,
-          updated.completed_at,
-          updated.account_username,
-          now,
-          id
-        )
-        .run();
+      try {
+        await d1
+          .prepare(`
+            UPDATE upload_jobs
+            SET caption = ?, thumbnail_url = ?, status = ?, drive_file_id = ?,
+                drive_file_url = ?, youtube_video_id = ?, youtube_video_url = ?,
+                encrypted_youtube_upload_session_uri = ?, error_details = ?, retry_count = ?,
+                completed_at = ?, account_username = ?, media_source_type = ?,
+                rights_confirmed = ?, resolved_provider = ?, media_duration_seconds = ?,
+                media_size_bytes = ?, youtube_privacy_status = ?, stage_retries_json = ?,
+                updated_at = ?
+            WHERE id = ?
+          `)
+          .bind(
+            updated.caption,
+            updated.thumbnail_url,
+            updated.status,
+            updated.drive_file_id,
+            updated.drive_file_url,
+            updated.youtube_video_id,
+            updated.youtube_video_url,
+            updated.encrypted_youtube_upload_session_uri || null,
+            updated.error_details,
+            updated.retry_count,
+            updated.completed_at,
+            updated.account_username,
+            updated.media_source_type || 'PUBLIC_PROBE',
+            updated.rights_confirmed ? 1 : 0,
+            updated.resolved_provider ?? null,
+            updated.media_duration_seconds ?? null,
+            updated.media_size_bytes ?? null,
+            updated.youtube_privacy_status ?? null,
+            updated.stage_retries_json ?? null,
+            now,
+            id
+          )
+          .run();
+      } catch {
+        // Fallback for pre-0004 schemas
+        await d1
+          .prepare(`
+            UPDATE upload_jobs
+            SET caption = ?, thumbnail_url = ?, status = ?, drive_file_id = ?,
+                drive_file_url = ?, youtube_video_id = ?, youtube_video_url = ?,
+                encrypted_youtube_upload_session_uri = ?, error_details = ?, retry_count = ?,
+                completed_at = ?, account_username = ?, updated_at = ?
+            WHERE id = ?
+          `)
+          .bind(
+            updated.caption,
+            updated.thumbnail_url,
+            updated.status,
+            updated.drive_file_id,
+            updated.drive_file_url,
+            updated.youtube_video_id,
+            updated.youtube_video_url,
+            updated.encrypted_youtube_upload_session_uri || null,
+            updated.error_details,
+            updated.retry_count,
+            updated.completed_at,
+            updated.account_username,
+            now,
+            id
+          )
+          .run();
+      }
 
       return updated;
     }
@@ -2247,5 +2301,116 @@ export class Repository {
       automation,
       recent_activity: recentActivity,
     };
+  }
+
+  // ==========================================
+  // Standing Operator Content-Rights Declaration (Phase 11.0)
+  // ==========================================
+
+  static async getRightsDeclaration(): Promise<OperatorRightsDeclaration | null> {
+    const d1 = getD1Database();
+    if (d1) {
+      try {
+        const row = await d1
+          .prepare(
+            'SELECT * FROM operator_rights_declarations ORDER BY updated_at DESC LIMIT 1'
+          )
+          .first<Record<string, unknown>>();
+        if (!row) return null;
+        return {
+          id: String(row.id),
+          operator_identity: String(row.operator_identity),
+          policy_version: String(row.policy_version || '1.0.0'),
+          status: row.status === 'REVOKED' ? 'REVOKED' : 'ACTIVE',
+          declaration_text: String(row.declaration_text || ''),
+          declared_at: String(row.declared_at),
+          revoked_at: row.revoked_at ? String(row.revoked_at) : null,
+          updated_at: String(row.updated_at),
+        };
+      } catch {
+        return null;
+      }
+    }
+
+    return store.rightsDeclaration;
+  }
+
+  static async hasActiveRightsDeclaration(): Promise<boolean> {
+    const decl = await this.getRightsDeclaration();
+    return Boolean(decl && decl.status === 'ACTIVE');
+  }
+
+  static async saveRightsDeclaration(input: {
+    operatorIdentity: string;
+    policyVersion?: string;
+    declarationText?: string;
+    status?: 'ACTIVE' | 'REVOKED';
+  }): Promise<OperatorRightsDeclaration> {
+    const now = new Date().toISOString();
+    const status = input.status || 'ACTIVE';
+    const policyVersion = input.policyVersion || '1.0.0';
+    const declarationText =
+      input.declarationText ||
+      'Operator standing declaration: every Reel submitted to this AutoShorts workflow is content owned by the operator or authorized with explicit creator permission to download, archive, and publicly republish.';
+
+    const existing = await this.getRightsDeclaration();
+    const record: OperatorRightsDeclaration = {
+      id: existing?.id || 'default-operator-rights',
+      operator_identity: input.operatorIdentity.trim() || 'operator',
+      policy_version: policyVersion,
+      status,
+      declaration_text: declarationText,
+      declared_at: status === 'ACTIVE' ? now : existing?.declared_at || now,
+      revoked_at: status === 'REVOKED' ? now : null,
+      updated_at: now,
+    };
+
+    const d1 = getD1Database();
+    if (d1) {
+      await d1
+        .prepare(`
+          INSERT INTO operator_rights_declarations (
+            id, operator_identity, policy_version, status, declaration_text,
+            declared_at, revoked_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            operator_identity = excluded.operator_identity,
+            policy_version = excluded.policy_version,
+            status = excluded.status,
+            declaration_text = excluded.declaration_text,
+            declared_at = excluded.declared_at,
+            revoked_at = excluded.revoked_at,
+            updated_at = excluded.updated_at
+        `)
+        .bind(
+          record.id,
+          record.operator_identity,
+          record.policy_version,
+          record.status,
+          record.declaration_text,
+          record.declared_at,
+          record.revoked_at,
+          record.updated_at
+        )
+        .run();
+    } else {
+      store.rightsDeclaration = record;
+    }
+
+    await this.logActivity(
+      'SETTINGS_UPDATED',
+      `Standing content-rights declaration ${status === 'ACTIVE' ? 'activated' : 'revoked'} by ${record.operator_identity} (policy v${record.policy_version})`,
+      undefined,
+      {
+        declarationId: record.id,
+        operatorIdentity: record.operator_identity,
+        policyVersion: record.policy_version,
+        status: record.status,
+        declaredAt: record.declared_at,
+        revokedAt: record.revoked_at,
+      }
+    );
+
+    return record;
   }
 }

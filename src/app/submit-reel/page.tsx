@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import Link from 'next/link';
 import {
   Film,
   UploadCloud,
@@ -10,24 +11,35 @@ import {
   ExternalLink,
   ShieldCheck,
   HardDrive,
-  Layers,
   ChevronRight,
+  RotateCcw,
 } from 'lucide-react';
 import { YouTubeIcon } from '@/components/ui/Icons';
-import { UploadJob, PublishingVisibility } from '@/types';
+import { UploadJob, OperatorRightsDeclaration } from '@/types';
 import { getJobStatusBadge, formatRelativeTime } from '@/lib/utils';
 import { fetchJsonWithTimeout } from '@/lib/apiClient';
 import { InlineNoticeBanner } from '@/components/ui/PageStateCard';
 
+const PIPELINE_STAGES: ReadonlyArray<{ key: string; label: string }> = [
+  { key: 'RECEIVED', label: 'Received' },
+  { key: 'RESOLVING_MEDIA', label: 'Resolving Media' },
+  { key: 'VALIDATING_MEDIA', label: 'Validating MP4' },
+  { key: 'ARCHIVING_TO_DRIVE', label: 'Drive Archive' },
+  { key: 'UPLOADING_TO_YOUTUBE', label: 'YouTube Upload' },
+  { key: 'VERIFYING_YOUTUBE_PUBLICATION', label: 'Verify Public' },
+  { key: 'COMPLETED', label: 'Completed' },
+];
+
 export default function SubmitReelPage() {
   const [reelUrl, setReelUrl] = useState('');
-  const [directVideoUrl, setDirectVideoUrl] = useState('');
-  const [captionOverride, setCaptionOverride] = useState('');
-  const [visibility, setVisibility] = useState<PublishingVisibility>('public');
-  const [confirmedRights, setConfirmedRights] = useState(false);
-  const [useSandbox, setUseSandbox] = useState(false);
-
   const [submitting, setSubmitting] = useState(false);
+  const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
+  const [activatingRights, setActivatingRights] = useState(false);
+
+  const [rightsDeclaration, setRightsDeclaration] = useState<OperatorRightsDeclaration | null>(null);
+  const [rightsActive, setRightsActive] = useState<boolean>(false);
+  const [loadingRights, setLoadingRights] = useState<boolean>(true);
+
   const [submissionFeedback, setSubmissionFeedback] = useState<{
     type: 'success' | 'error' | 'info';
     message: string;
@@ -37,7 +49,7 @@ export default function SubmitReelPage() {
   const [loadingJobs, setLoadingJobs] = useState(true);
   const [loadJobsError, setLoadJobsError] = useState<string | null>(null);
 
-  // Live client-side shortcode extraction
+  // Live client-side shortcode extraction (supports /reel/, /reels/, /p/, /tv/, query params, or bare shortcode)
   const extractedShortcode = useMemo(() => {
     if (!reelUrl.trim()) return null;
     const match = reelUrl.match(/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]{9,25})/i);
@@ -46,37 +58,21 @@ export default function SubmitReelPage() {
     return null;
   }, [reelUrl]);
 
-  // Live client-side direct MP4 stream validation (never exposes signed query params)
-  const directUrlAudit = useMemo(() => {
-    const trimmed = directVideoUrl.trim();
-    if (!trimmed) return { status: 'empty' as const };
+  const fetchRightsDeclaration = useCallback(async () => {
     try {
-      const parsed = new URL(trimmed);
-      if (parsed.protocol !== 'https:') {
-        return {
-          status: 'invalid' as const,
-          message: 'Creator-authorized direct media URL must use https://.',
-        };
+      const res = await fetchJsonWithTimeout<{
+        success: boolean;
+        isActive?: boolean;
+        declaration?: OperatorRightsDeclaration | null;
+      }>('/api/rights-declaration');
+      if (res.ok && res.data?.success) {
+        setRightsActive(Boolean(res.data.isActive));
+        setRightsDeclaration(res.data.declaration ?? null);
       }
-      const host = parsed.hostname.toLowerCase();
-      const isMp4Path = parsed.pathname.toLowerCase().endsWith('.mp4');
-      if (
-        (host === 'instagram.com' || host === 'www.instagram.com' || host.endsWith('.instagram.com')) &&
-        !isMp4Path
-      ) {
-        return {
-          status: 'webpage' as const,
-          host,
-          isMp4Path: false,
-          message:
-            'Instagram webpage URL detected (instagram.com/reel/...). Paste the direct Meta CDN .mp4 stream URL instead.',
-        };
-      }
-      return { status: 'valid' as const, host, isMp4Path };
-    } catch {
-      return { status: 'invalid' as const, message: 'Invalid direct media URL format.' };
+    } finally {
+      setLoadingRights(false);
     }
-  }, [directVideoUrl]);
+  }, []);
 
   const fetchJobs = useCallback(async () => {
     try {
@@ -97,10 +93,48 @@ export default function SubmitReelPage() {
   }, []);
 
   useEffect(() => {
+    fetchRightsDeclaration();
     fetchJobs();
-    const interval = setInterval(fetchJobs, 6000);
+    const interval = setInterval(fetchJobs, 4000);
     return () => clearInterval(interval);
-  }, [fetchJobs]);
+  }, [fetchJobs, fetchRightsDeclaration]);
+
+  const handleActivateStandingRights = async () => {
+    setActivatingRights(true);
+    setSubmissionFeedback(null);
+    try {
+      const res = await fetchJsonWithTimeout<{
+        success: boolean;
+        isActive?: boolean;
+        declaration?: OperatorRightsDeclaration;
+        error?: string;
+      }>('/api/rights-declaration', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operatorIdentity: 'operator-admin',
+          policyVersion: '1.0.0',
+          status: 'ACTIVE',
+        }),
+      });
+      if (res.ok && res.data?.success) {
+        setRightsActive(Boolean(res.data.isActive));
+        setRightsDeclaration(res.data.declaration ?? null);
+        setSubmissionFeedback({
+          type: 'success',
+          message:
+            'Standing content-rights declaration activated (v1.0.0). Future Reels can be submitted with a single click.',
+        });
+      } else {
+        setSubmissionFeedback({
+          type: 'error',
+          message: res.error || res.data?.error || 'Failed to activate standing rights declaration.',
+        });
+      }
+    } finally {
+      setActivatingRights(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -110,26 +144,16 @@ export default function SubmitReelPage() {
       setSubmissionFeedback({
         type: 'error',
         message:
-          'Please enter a valid Instagram Reel URL or shortcode (e.g. https://www.instagram.com/reel/C3b4XyzABC1/).',
+          'Please paste a valid Instagram Reel URL (e.g. https://www.instagram.com/reel/Df22NkrBxal/).',
       });
       return;
     }
 
-    const trimmedDirectUrl = directVideoUrl.trim();
-    if (trimmedDirectUrl && directUrlAudit.status !== 'valid') {
+    if (!rightsActive) {
       setSubmissionFeedback({
         type: 'error',
         message:
-          directUrlAudit.message ||
-          'Creator-authorized direct media URL must be a valid HTTPS direct MP4 stream.',
-      });
-      return;
-    }
-
-    if (!confirmedRights) {
-      setSubmissionFeedback({
-        type: 'error',
-        message: 'Compliance requirement: You must confirm creator ownership or republishing rights before submitting.',
+          'Activate your one-time Standing Content-Rights Declaration above (or in Settings) before submitting.',
       });
       return;
     }
@@ -148,11 +172,6 @@ export default function SubmitReelPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             reelUrl: reelUrl.trim(),
-            directVideoUrl: trimmedDirectUrl || undefined,
-            captionOverride: captionOverride.trim() || undefined,
-            visibility,
-            confirmedRights,
-            sandbox: useSandbox,
           }),
         },
         120000
@@ -163,12 +182,9 @@ export default function SubmitReelPage() {
           type: 'success',
           message:
             res.data.message ||
-            `Reel submitted successfully! Current status: ${res.data.job?.status ?? 'SUBMITTED'}`,
+            `Reel #${extractedShortcode} processed automatically. Status: ${res.data.job?.status ?? 'RECEIVED'}`,
         });
         setReelUrl('');
-        setDirectVideoUrl('');
-        setCaptionOverride('');
-        setConfirmedRights(false);
         await fetchJobs();
       } else {
         setSubmissionFeedback({
@@ -181,28 +197,42 @@ export default function SubmitReelPage() {
     }
   };
 
-  const handleRetry = async (jobId: string) => {
-    const res = await fetchJsonWithTimeout<{ success: boolean; error?: string }>(
-      `/api/uploads/${jobId}/retry`,
-      { method: 'POST' },
-      120000
-    );
-    if (res.ok && res.data?.success) {
-      setSubmissionFeedback({
-        type: 'success',
-        message: 'Retry request processed cleanly.',
-      });
-      await fetchJobs();
-    } else {
-      setSubmissionFeedback({
-        type: 'error',
-        message: res.error || res.data?.error || 'Retry failed.',
-      });
+  const handleAutomaticRetry = async (jobId: string) => {
+    setRetryingJobId(jobId);
+    setSubmissionFeedback(null);
+    try {
+      const res = await fetchJsonWithTimeout<{
+        success: boolean;
+        message?: string;
+        error?: string;
+      }>(
+        `/api/uploads/${jobId}/retry`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        },
+        120000
+      );
+      if (res.ok && res.data?.success) {
+        setSubmissionFeedback({
+          type: 'success',
+          message: res.data.message || 'Automatic retry completed.',
+        });
+        await fetchJobs();
+      } else {
+        setSubmissionFeedback({
+          type: 'error',
+          message: res.error || res.data?.error || 'Automatic retry failed.',
+        });
+      }
+    } finally {
+      setRetryingJobId(null);
     }
   };
 
   return (
-    <div className="p-4 sm:p-8 space-y-8 max-w-7xl w-full mx-auto">
+    <div className="p-4 sm:p-8 space-y-8 max-w-6xl w-full mx-auto">
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-zinc-800">
         <div>
@@ -210,15 +240,16 @@ export default function SubmitReelPage() {
             <div className="p-2 bg-gradient-to-tr from-rose-500/20 to-purple-500/20 border border-rose-500/30 rounded-xl text-rose-400">
               <Film className="w-6 h-6" />
             </div>
-            <h1 className="text-2xl font-bold tracking-tight text-white">Instagram Reel Submission</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-white">Submit Instagram Reel</h1>
           </div>
           <p className="text-sm text-zinc-400">
-            Submit public Instagram Reel URLs directly to the cloud streaming pipeline. Never stores video binaries on your laptop SSD.
+            Paste one Instagram Reel URL. AutoShorts automatically resolves media, archives to Google Drive, and publishes publicly to YouTube Shorts.
           </p>
         </div>
 
         <div className="flex items-center gap-3">
           <button
+            type="button"
             onClick={() => fetchJobs()}
             className="flex items-center gap-2 px-3 py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/80 rounded-xl text-xs font-medium text-zinc-300 transition-colors"
           >
@@ -228,432 +259,251 @@ export default function SubmitReelPage() {
         </div>
       </div>
 
-      {/* Main Grid: Form (Left) & Pipeline Status / Architecture Details (Right) */}
+      {/* Standing Account Policy Strip */}
+      <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2.5 text-xs">
+          <span
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-semibold border ${
+              rightsActive
+                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                : 'bg-amber-500/10 text-amber-300 border-amber-500/20'
+            }`}
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            {loadingRights
+              ? 'Checking Rights Policy...'
+              : rightsActive
+              ? `Standing Rights Active (v${rightsDeclaration?.policy_version || '1.0.0'})`
+              : 'Standing Rights Declaration Required'}
+          </span>
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-rose-500/10 text-rose-300 border border-rose-500/20 font-semibold">
+            <YouTubeIcon className="w-3.5 h-3.5" />
+            Visibility: PUBLIC (Permanent)
+          </span>
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 font-medium">
+            <HardDrive className="w-3.5 h-3.5" />
+            Archive: Instagram Reels Backup
+          </span>
+        </div>
+
+        {!loadingRights && !rightsActive ? (
+          <button
+            type="button"
+            onClick={handleActivateStandingRights}
+            disabled={activatingRights}
+            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition-colors disabled:opacity-50"
+          >
+            {activatingRights ? 'Activating...' : 'Activate One-Time Rights Declaration'}
+          </button>
+        ) : (
+          <Link
+            href="/settings"
+            className="text-xs text-zinc-400 hover:text-zinc-200 inline-flex items-center gap-1"
+          >
+            Manage account defaults <ChevronRight className="w-3.5 h-3.5" />
+          </Link>
+        )}
+      </div>
+
+      {/* Main Single-Field Form */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/* Left Column: Submission Form */}
         <div className="lg:col-span-7 space-y-6">
           <form
             onSubmit={handleSubmit}
             className="bg-zinc-900/50 border border-zinc-800/80 rounded-2xl p-6 space-y-5 shadow-xl backdrop-blur-sm"
           >
-            <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
-              <h2 className="text-base font-semibold text-white flex items-center gap-2">
-                <UploadCloud className="w-4 h-4 text-rose-400" />
-                Submit New Reel
-              </h2>
-              <span className="text-xs px-2.5 py-0.5 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20 font-medium">
-                Primary Flow
-              </span>
-            </div>
-
-            {/* Reel URL Input */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-zinc-300 block">
-                Instagram Reel URL or Shortcode <span className="text-rose-400">*</span>
+            <div className="space-y-2">
+              <label
+                htmlFor="instagram-reel-url"
+                className="text-sm font-semibold text-white block"
+              >
+                Instagram Reel URL
               </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  placeholder="https://www.instagram.com/reel/C3b4XyzABC1/ or C3b4XyzABC1"
-                  value={reelUrl}
-                  onChange={(e) => setReelUrl(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-700/80 rounded-xl px-4 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-rose-500/50 focus:border-rose-500 transition"
-                  required
-                />
-              </div>
+              <input
+                id="instagram-reel-url"
+                type="text"
+                placeholder="Paste Instagram Reel URL (e.g. https://www.instagram.com/reel/Df22NkrBxal/)"
+                value={reelUrl}
+                onChange={(e) => setReelUrl(e.target.value)}
+                disabled={submitting}
+                className="w-full bg-zinc-950 border border-zinc-700/80 rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-rose-500/50 focus:border-rose-500 transition disabled:opacity-60"
+                required
+              />
 
-              {/* Live Shortcode Badge */}
               {extractedShortcode && (
                 <div className="flex items-center gap-2 pt-1 text-xs">
-                  <span className="text-zinc-400">Canonical Shortcode:</span>
+                  <span className="text-zinc-400">Detected Shortcode:</span>
                   <span className="px-2 py-0.5 rounded-md bg-zinc-800 font-mono text-rose-300 border border-zinc-700">
                     {extractedShortcode}
                   </span>
                   <span className="text-emerald-400 flex items-center gap-1">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> Valid Format
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Ready
                   </span>
                 </div>
               )}
             </div>
 
-            {/* Direct Video / Authorized Stream URL (Optional) */}
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between gap-2">
-                <label className="text-xs font-semibold text-zinc-300">
-                  Creator-Authorized Direct Video Stream / CDN Link (Masked) <span className="text-zinc-500 font-normal">(Optional)</span>
-                </label>
-                <span className="text-[11px] text-zinc-400">Authorized MP4 / CDN origin</span>
-              </div>
-              <input
-                type="password"
-                autoComplete="off"
-                placeholder="https://...fbcdn.net/...mp4 (Masked direct MP4 stream link)"
-                value={directVideoUrl}
-                onChange={(e) => setDirectVideoUrl(e.target.value)}
-                className="w-full bg-zinc-950 border border-zinc-700/80 rounded-xl px-4 py-2.5 text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-rose-500/50 focus:border-rose-500 transition"
-              />
-              {directUrlAudit.status === 'valid' && (
-                <p className="text-[11px] text-emerald-400">
-                  Direct media host detected: <span className="font-mono">{directUrlAudit.host}</span>
-                  {directUrlAudit.isMp4Path ? ' (.mp4)' : ''} — signed query parameters remain masked.
-                </p>
-              )}
-              {(directUrlAudit.status === 'webpage' || directUrlAudit.status === 'invalid') && (
-                <p className="text-[11px] text-rose-400">
-                  {directUrlAudit.message}
-                </p>
-              )}
-              <p className="text-[11px] text-zinc-400 leading-relaxed">
-                Signed CDN URLs are masked on screen and never stored in the database. Supplying an authorized direct `.mp4` stream enables Cloudflare-native streaming to Drive and YouTube.
-              </p>
-            </div>
-
-            {/* Caption & Title Override */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-zinc-300">
-                Custom Caption Override <span className="text-zinc-500 font-normal">(Optional)</span>
-              </label>
-              <textarea
-                placeholder="Leave blank to use original caption, or write custom YouTube Shorts title & description..."
-                value={captionOverride}
-                onChange={(e) => setCaptionOverride(e.target.value)}
-                rows={2}
-                className="w-full bg-zinc-950 border border-zinc-700/80 rounded-xl px-4 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-rose-500/50 focus:border-rose-500 transition resize-none"
-              />
-            </div>
-
-            {/* YouTube Shorts Visibility */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-zinc-300 block">
-                YouTube Shorts Visibility
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                {(['public', 'unlisted', 'private'] as PublishingVisibility[]).map((v) => (
-                  <button
-                    key={v}
-                    type="button"
-                    onClick={() => setVisibility(v)}
-                    className={`py-2 px-3 rounded-xl text-xs font-medium border capitalize transition-all ${
-                      visibility === v
-                        ? 'bg-rose-500/15 border-rose-500 text-rose-300 shadow-sm'
-                        : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
-                    }`}
-                  >
-                    {v === 'public' ? 'Public (Default)' : v}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Sandbox Test Mode Toggle */}
-            <div className="flex items-center justify-between p-3 rounded-xl bg-zinc-950/60 border border-zinc-800/80">
-              <div className="space-y-0.5">
-                <span className="text-xs font-semibold text-zinc-300 block">Sandbox Verification Mode</span>
-                <span className="text-[11px] text-zinc-500">Simulate end-to-end streaming without consuming live YouTube API quota</span>
-              </div>
-              <input
-                type="checkbox"
-                checked={useSandbox}
-                onChange={(e) => setUseSandbox(e.target.checked)}
-                className="w-4 h-4 accent-rose-500 cursor-pointer rounded"
-              />
-            </div>
-
-            {/* Mandatory Rights Confirmation Checkbox */}
-            <div className="p-3.5 rounded-xl bg-zinc-950/90 border border-rose-500/30 space-y-2">
-              <label className="flex items-start gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={confirmedRights}
-                  onChange={(e) => setConfirmedRights(e.target.checked)}
-                  className="mt-1 w-4 h-4 accent-rose-500 cursor-pointer rounded"
-                  required
-                />
-                <span className="text-xs text-zinc-300 leading-relaxed">
-                  <strong className="text-white">Copyright & Ownership Confirmation:</strong> I confirm that I own this video or have explicit creator permission to republish it to YouTube Shorts. AutoShorts complies with developer terms and does not support unauthorized content re-uploading.
-                </span>
-              </label>
-            </div>
-
-            {/* Feedback Alert */}
             {submissionFeedback && (
               <div
-                className={`p-3.5 rounded-xl text-xs flex items-start gap-2.5 border ${
+                className={`p-3.5 rounded-xl border text-xs flex items-start gap-2.5 ${
                   submissionFeedback.type === 'success'
-                    ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
-                    : 'bg-rose-500/10 text-rose-300 border-rose-500/20'
+                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300'
+                    : submissionFeedback.type === 'error'
+                    ? 'bg-rose-500/10 border-rose-500/20 text-rose-300'
+                    : 'bg-blue-500/10 border-blue-500/20 text-blue-300'
                 }`}
               >
                 {submissionFeedback.type === 'success' ? (
-                  <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-400" />
+                  <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
                 ) : (
-                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-400" />
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                 )}
-                <div className="leading-relaxed">{submissionFeedback.message}</div>
+                <span className="leading-relaxed">{submissionFeedback.message}</span>
               </div>
             )}
 
-            {/* Submit Action Button */}
             <button
               type="submit"
-              disabled={submitting || !confirmedRights || !reelUrl.trim()}
-              className="w-full py-3 px-4 rounded-xl font-medium text-sm text-white bg-gradient-to-r from-rose-600 via-rose-500 to-amber-500 hover:from-rose-500 hover:to-amber-400 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-rose-500/20 transition-all flex items-center justify-center gap-2"
+              disabled={submitting || !extractedShortcode || !rightsActive}
+              className="w-full py-3 px-5 bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 disabled:from-zinc-800 disabled:to-zinc-800 disabled:text-zinc-500 text-white font-semibold rounded-xl text-sm flex items-center justify-center gap-2 shadow-lg shadow-rose-900/20 transition-all"
             >
               {submitting ? (
                 <>
                   <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>Processing Stream Pipeline...</span>
+                  <span>Processing Reel Automatically (Resolving, Archiving &amp; Publishing)...</span>
                 </>
               ) : (
                 <>
-                  <Film className="w-4 h-4" />
-                  <span>Submit Reel to Pipeline</span>
+                  <UploadCloud className="w-4 h-4" />
+                  <span>Process Reel Automatically</span>
                 </>
               )}
             </button>
           </form>
-        </div>
 
-        {/* Right Column: Architectural Pipeline Rules & Stream Flow */}
-        <div className="lg:col-span-5 space-y-6">
-          {/* Architecture Overview */}
-          <div className="bg-zinc-900/50 border border-zinc-800/80 rounded-2xl p-6 space-y-4">
-            <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              Pipeline Execution Guarantees
-            </h3>
-
-            <div className="space-y-3 text-xs text-zinc-400">
-              <div className="flex gap-2.5">
-                <span className="font-mono text-rose-400 font-bold shrink-0">01</span>
-                <div>
-                  <strong className="text-zinc-200 block mb-0.5">Zero Local SSD Storage</strong>
-                  <span>Media streams directly from cloud origin to Google Drive and YouTube Shorts using 5MB RAM buffers. 0 bytes written to laptop disk.</span>
-                </div>
-              </div>
-
-              <div className="flex gap-2.5">
-                <span className="font-mono text-rose-400 font-bold shrink-0">02</span>
-                <div>
-                  <strong className="text-zinc-200 block mb-0.5">Strict Policy Compliance</strong>
-                  <span>No session stealing, no CAPTCHA bypasses, and no proxy evasion. Protected content reports waiting state honestly.</span>
-                </div>
-              </div>
-
-              <div className="flex gap-2.5">
-                <span className="font-mono text-rose-400 font-bold shrink-0">03</span>
-                <div>
-                  <strong className="text-zinc-200 block mb-0.5">Deduplication Protection</strong>
-                  <span>Shortcode hashing prevents duplicate processing and double YouTube uploads.</span>
-                </div>
-              </div>
-
-              <div className="flex gap-2.5">
-                <span className="font-mono text-rose-400 font-bold shrink-0">04</span>
-                <div>
-                  <strong className="text-zinc-200 block mb-0.5">Automatic #shorts Formatting</strong>
-                  <span>Shorts titles format automatically with valid hashtags and source attribution.</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Granular Pipeline State Map */}
-          <div className="bg-zinc-900/50 border border-zinc-800/80 rounded-2xl p-6 space-y-3">
-            <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-              <Layers className="w-4 h-4 text-purple-400" />
-              Pipeline State Machine
-            </h3>
-
-            <div className="space-y-2 text-xs">
-              <div className="flex items-center gap-2 text-zinc-300">
-                <span className="w-2 h-2 rounded-full bg-zinc-500"></span>
-                <span className="font-mono">SUBMITTED</span>
-                <ChevronRight className="w-3 h-3 text-zinc-600" />
-                <span className="font-mono">VALIDATING</span>
-                <ChevronRight className="w-3 h-3 text-zinc-600" />
-                <span className="font-mono">RESOLVING_MEDIA</span>
-              </div>
-              <div className="flex items-center gap-2 text-zinc-300 pl-4 border-l-2 border-zinc-800">
-                <ChevronRight className="w-3 h-3 text-emerald-400" />
-                <span className="font-mono text-emerald-400">MEDIA_AVAILABLE</span>
-                <span className="text-zinc-500">or</span>
-                <span className="font-mono text-amber-400">WAITING_FOR_AUTHORIZED_MEDIA</span>
-              </div>
-              <div className="flex items-center gap-2 text-zinc-300 pl-4 border-l-2 border-zinc-800">
-                <ChevronRight className="w-3 h-3 text-blue-400" />
-                <span className="font-mono text-indigo-400">ARCHIVING_TO_DRIVE</span>
-                <ChevronRight className="w-3 h-3 text-zinc-600" />
-                <span className="font-mono text-cyan-400">STORED_IN_DRIVE</span>
-              </div>
-              <div className="flex items-center gap-2 text-zinc-300 pl-4 border-l-2 border-zinc-800">
-                <ChevronRight className="w-3 h-3 text-rose-400" />
-                <span className="font-mono text-blue-400">UPLOADING_TO_YOUTUBE</span>
-                <ChevronRight className="w-3 h-3 text-zinc-600" />
-                <span className="font-mono text-emerald-400">COMPLETED</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Reel Submissions & Processing Queue Table */}
-      <div className="space-y-4 pt-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-bold text-white flex items-center gap-2">
-              <Film className="w-5 h-5 text-rose-400" />
-              Reel Submission & Queue Monitor
+          {/* Pipeline Stages Overview */}
+          <div className="bg-zinc-900/40 border border-zinc-800/80 rounded-2xl p-5 space-y-3">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+              Automated Cloud Pipeline
             </h2>
-            <p className="text-xs text-zinc-400">Real-time status of all submitted Instagram Reels</p>
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-300">
+              {PIPELINE_STAGES.map((stage, idx) => (
+                <React.Fragment key={stage.key}>
+                  <span className="px-2.5 py-1 rounded-lg bg-zinc-950 border border-zinc-800 font-medium">
+                    {stage.label}
+                  </span>
+                  {idx < PIPELINE_STAGES.length - 1 && (
+                    <ChevronRight className="w-3 h-3 text-zinc-600" />
+                  )}
+                </React.Fragment>
+              ))}
+            </div>
           </div>
-          <span className="text-xs text-zinc-400 bg-zinc-900 px-3 py-1.5 rounded-xl border border-zinc-800">
-            {jobs.length} Total Submissions
-          </span>
         </div>
 
-        <div className="bg-zinc-900/40 border border-zinc-800/80 rounded-2xl overflow-hidden shadow-xl">
+        {/* Right Column: Live Recent Jobs */}
+        <div className="lg:col-span-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-white">Live Processing Queue</h2>
+            <Link
+              href="/uploads"
+              className="text-xs text-rose-400 hover:text-rose-300 font-medium"
+            >
+              Full Upload History →
+            </Link>
+          </div>
+
           {loadJobsError && (
-            <div className="p-4 border-b border-zinc-800/80">
-              <InlineNoticeBanner
-                type="warning"
-                message={`Unable to refresh Reel queue: ${loadJobsError}`}
-                onDismiss={() => setLoadJobsError(null)}
-              />
-            </div>
+            <InlineNoticeBanner type="warning" message={loadJobsError} />
           )}
-          {loadingJobs && jobs.length === 0 ? (
-            <div className="p-10 text-center space-y-2 text-xs text-zinc-400">
-              <RefreshCw className="w-5 h-5 animate-spin text-rose-500 mx-auto" />
-              <p>Loading Reel submission queue...</p>
-            </div>
-          ) : jobs.length === 0 ? (
-            <div className="p-12 text-center space-y-3">
-              <Film className="w-8 h-8 text-zinc-600 mx-auto" />
-              <p className="text-sm text-zinc-400 font-medium">No Reels submitted yet.</p>
-              <p className="text-xs text-zinc-500">
-                Enter an Instagram Reel URL above to start streaming directly to YouTube Shorts.
-              </p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-zinc-950/80 text-zinc-400 border-b border-zinc-800 uppercase tracking-wider font-semibold">
-                  <tr>
-                    <th className="py-3 px-4">Reel / Shortcode</th>
-                    <th className="py-3 px-4">Status</th>
-                    <th className="py-3 px-4">Cloud Drive Archive</th>
-                    <th className="py-3 px-4">YouTube Shorts</th>
-                    <th className="py-3 px-4">Details / Timestamp</th>
-                    <th className="py-3 px-4 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-800/60">
-                  {jobs.map((job) => {
-                    const badge = getJobStatusBadge(job.status);
-                    return (
-                      <tr key={job.id} className="hover:bg-zinc-900/50 transition-colors">
-                        {/* Reel / Shortcode */}
-                        <td className="py-3.5 px-4">
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-2">
-                              <span className="font-mono text-zinc-200 font-bold">
-                                {job.shortcode || job.reel_id}
-                              </span>
-                              {job.original_reel_url && (
-                                <a
-                                  href={job.original_reel_url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-zinc-500 hover:text-zinc-300"
-                                >
-                                  <ExternalLink className="w-3.5 h-3.5" />
-                                </a>
-                              )}
-                            </div>
-                            <p className="text-[11px] text-zinc-400 line-clamp-1 max-w-xs">
-                              {job.caption || 'No caption provided'}
-                            </p>
-                          </div>
-                        </td>
 
-                        {/* Status */}
-                        <td className="py-3.5 px-4 whitespace-nowrap">
-                          <span
-                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border ${badge.bg} ${badge.text} ${badge.border}`}
+          <div className="space-y-3">
+            {jobs.length === 0 ? (
+              <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-8 text-center text-xs text-zinc-500">
+                No Reel jobs yet. Paste an Instagram Reel URL to launch the automated pipeline.
+              </div>
+            ) : (
+              jobs.slice(0, 6).map((job) => {
+                const badge = getJobStatusBadge(job.status);
+                const isRetrying = retryingJobId === job.id;
+                const canAutoRetry =
+                  job.status === 'FAILED' ||
+                  job.status === 'WAITING_FOR_AUTHORIZED_MEDIA' ||
+                  job.status === 'AMBIGUOUS_UPLOAD';
+
+                return (
+                  <div
+                    key={job.id}
+                    className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-4 space-y-2.5"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-white truncate">
+                          {job.caption || `Reel #${job.shortcode || job.reel_id}`}
+                        </p>
+                        <p className="text-[11px] text-zinc-400 font-mono mt-0.5">
+                          @{job.account_username} • {job.shortcode || job.reel_id} •{' '}
+                          {formatRelativeTime(job.updated_at || job.created_at)}
+                        </p>
+                      </div>
+                      <span
+                        className={`shrink-0 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-semibold border ${badge.bg} ${badge.text} ${badge.border}`}
+                      >
+                        {badge.label}
+                      </span>
+                    </div>
+
+                    {job.error_details && (
+                      <p className="text-[11px] text-rose-300 bg-rose-500/10 border border-rose-500/20 rounded-xl p-2 break-words">
+                        {job.error_details}
+                      </p>
+                    )}
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                      <div className="flex items-center gap-3 text-[11px]">
+                        {job.drive_file_url && (
+                          <a
+                            href={job.drive_file_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-cyan-400 hover:underline font-medium"
                           >
-                            <span className="w-1.5 h-1.5 rounded-full bg-current"></span>
-                            {badge.label}
-                          </span>
-                        </td>
+                            <HardDrive className="w-3 h-3" />
+                            Drive Archive
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        )}
+                        {job.youtube_video_url && (
+                          <a
+                            href={job.youtube_video_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-red-400 hover:underline font-semibold"
+                          >
+                            <YouTubeIcon className="w-3 h-3" />
+                            Public Short
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        )}
+                      </div>
 
-                        {/* Google Drive Archive */}
-                        <td className="py-3.5 px-4 whitespace-nowrap">
-                          {job.drive_file_id ? (
-                            <a
-                              href={job.drive_file_url || `https://drive.google.com/file/d/${job.drive_file_id}/view`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1.5 text-cyan-400 hover:text-cyan-300 hover:underline"
-                            >
-                              <HardDrive className="w-3.5 h-3.5" />
-                              <span>View in Drive</span>
-                              <ExternalLink className="w-3 h-3" />
-                            </a>
-                          ) : (
-                            <span className="text-zinc-500">—</span>
-                          )}
-                        </td>
-
-                        {/* YouTube Shorts */}
-                        <td className="py-3.5 px-4 whitespace-nowrap">
-                          {job.youtube_video_id ? (
-                            <a
-                              href={job.youtube_video_url || `https://youtube.com/shorts/${job.youtube_video_id}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1.5 text-rose-400 hover:text-rose-300 font-medium hover:underline"
-                            >
-                              <YouTubeIcon className="w-3.5 h-3.5" />
-                              <span>Watch Short</span>
-                              <ExternalLink className="w-3 h-3" />
-                            </a>
-                          ) : (
-                            <span className="text-zinc-500">—</span>
-                          )}
-                        </td>
-
-                        {/* Details / Timestamp */}
-                        <td className="py-3.5 px-4 max-w-xs">
-                          {job.error_details ? (
-                            <p className="text-[11px] text-amber-400 line-clamp-2" title={job.error_details}>
-                              {job.error_details}
-                            </p>
-                          ) : (
-                            <span className="text-[11px] text-zinc-500">
-                              {formatRelativeTime(job.created_at)}
-                            </span>
-                          )}
-                        </td>
-
-                        {/* Actions */}
-                        <td className="py-3.5 px-4 text-right whitespace-nowrap">
-                          {job.status === 'FAILED' && (
-                            <button
-                              onClick={() => handleRetry(job.id)}
-                              className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-[11px] font-medium border border-zinc-700 transition-colors"
-                            >
-                              Retry
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+                      {canAutoRetry && (
+                        <button
+                          type="button"
+                          onClick={() => handleAutomaticRetry(job.id)}
+                          disabled={isRetrying}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 text-[11px] font-semibold disabled:opacity-50"
+                        >
+                          <RotateCcw className={`w-3 h-3 ${isRetrying ? 'animate-spin' : ''}`} />
+                          {isRetrying ? 'Retrying...' : 'Retry Automatically'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
         </div>
       </div>
     </div>

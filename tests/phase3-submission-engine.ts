@@ -187,6 +187,37 @@ async function runPhase3Tests() {
       return;
     }
 
+    // Google Drive file metadata & download stream
+    if (req.url?.includes('/drive/v3/files/drive_file_p3_stream')) {
+      if (req.url.includes('alt=media')) {
+        if (req.method === 'HEAD') {
+          res.writeHead(200, {
+            'Content-Type': 'video/mp4',
+            'Content-Length': memoryVideoBuffer.length.toString(),
+          });
+          res.end();
+          return;
+        }
+        res.writeHead(200, {
+          'Content-Type': 'video/mp4',
+          'Content-Length': memoryVideoBuffer.length.toString(),
+        });
+        res.end(memoryVideoBuffer);
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          id: 'drive_file_p3_stream',
+          name: 'reel_StreamShort1_creator.mp4',
+          size: memoryVideoBuffer.length.toString(),
+          mimeType: 'video/mp4',
+          trashed: false,
+        })
+      );
+      return;
+    }
+
     // Google Drive chunk upload
     if (req.url === '/drive-upload-chunk') {
       chunksReceived += 1;
@@ -211,6 +242,30 @@ async function runPhase3Tests() {
         id: 'yt_short_p3_video_id',
         snippet: { title: 'Viral Reel Stream #shorts' },
       }));
+      return;
+    }
+
+    // YouTube video details verification
+    if (req.url?.includes('/youtube/v3/videos')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          items: [
+            {
+              id: 'yt_short_p3_video_id',
+              snippet: {
+                title: 'Exciting new product launch! Must see this workflow.',
+                description: 'Exciting new product launch! Must see this workflow.',
+                channelId: 'UC_Phase3Shorts',
+              },
+              status: {
+                privacyStatus: 'private',
+                uploadStatus: 'uploaded',
+              },
+            },
+          ],
+        })
+      );
       return;
     }
 

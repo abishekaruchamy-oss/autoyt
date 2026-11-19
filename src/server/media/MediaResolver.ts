@@ -11,6 +11,10 @@
 
 import { InstagramBusinessDiscoveryService } from '../monitoring/businessDiscovery';
 import { ReClipYtDlpProvider } from './reclipProvider';
+import {
+  CloudNativePublicReelProvider,
+  ExternalCloudResolverProvider,
+} from './cloudNativeResolver';
 
 export interface MediaResolutionResult {
   success: boolean;
@@ -19,6 +23,8 @@ export interface MediaResolutionResult {
   provider:
     | 'META_GRAPH_API'
     | 'INSTAGRAM_BUSINESS_DISCOVERY'
+    | 'PUBLIC_IG_NATIVE'
+    | 'EXTERNAL_CLOUD_RESOLVER'
     | 'CREATOR_AUTHORIZED_URL'
     | 'USER_DIRECT_STREAM'
     | 'GOOGLE_DRIVE_SOURCE'
@@ -26,6 +32,12 @@ export interface MediaResolutionResult {
     | 'PUBLIC_PROBE'
     | 'SANDBOX';
   mediaUrl?: string; // Direct downloadable/streamable video URL when authorized
+  mediaExpiresAt?: string;
+  mimeType?: string;
+  durationSeconds?: number;
+  width?: number;
+  height?: number;
+  sizeBytes?: number;
   caption?: string;
   username?: string;
   thumbnailUrl?: string;
@@ -311,7 +323,7 @@ export class InstagramBusinessDiscoveryProvider implements IMediaProvider {
       accessToken: options?.metaToken,
       instagramAccountId: options?.instagramAccountId,
     });
-    return creds.isConfigured || Boolean(options?.username);
+    return creds.isConfigured;
   }
 
   async resolve(
@@ -502,12 +514,15 @@ export class MediaResolver {
     new UserDirectStreamProvider(),
     new InstagramBusinessDiscoveryProvider(),
     new MetaGraphApiProvider(),
+    new CloudNativePublicReelProvider(),
+    new ExternalCloudResolverProvider(),
     new ReClipYtDlpProvider(),
     new StandardPublicProbeProvider(),
   ];
 
   /**
-   * Resolves an Instagram Reel URL to its media source through the provider chain
+   * Resolves an Instagram Reel URL to its media source through the provider chain.
+   * Automatically falls through to alternate permitted providers if an earlier provider fails.
    */
   static async resolveReel(
     inputUrl: string,
@@ -518,6 +533,7 @@ export class MediaResolver {
       metaToken?: string;
       sandbox?: boolean;
       disableYtDlp?: boolean;
+      disablePublicNative?: boolean;
       caption?: string;
       username?: string;
     }
@@ -536,13 +552,30 @@ export class MediaResolver {
     }
 
     const { shortcode } = extraction;
+    let lastFailure: MediaResolutionResult | null = null;
 
-    // Evaluate providers in priority order
+    // Evaluate providers in priority order with automatic fallback on failure
     for (const provider of this.providers) {
-      if (provider.canResolve(inputUrl, options)) {
-        const result = await provider.resolve(inputUrl, shortcode, options);
+      if (!provider.canResolve(inputUrl, options)) continue;
+
+      const result = await provider.resolve(inputUrl, shortcode, options);
+      if (result.success && result.mediaUrl) {
         return result;
       }
+
+      // Stop immediately on authoritative 404 or SSRF security rejection
+      if (
+        result.status === 'NOT_FOUND' ||
+        result.reason?.includes('SSRF Security rejection')
+      ) {
+        return result;
+      }
+
+      lastFailure = result;
+    }
+
+    if (lastFailure) {
+      return lastFailure;
     }
 
     // Fallback

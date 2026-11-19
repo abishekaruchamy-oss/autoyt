@@ -414,11 +414,12 @@ export default {
             { status: 400, headers: jsonHeaders }
           );
         }
-        if (!body.confirmedRights) {
+        const standingRightsActive = await Repository.hasActiveRightsDeclaration();
+        if (!body.confirmedRights && !standingRightsActive) {
           return new Response(
             JSON.stringify({
               success: false,
-              error: 'Compliance requirement: Creator copyright or distribution rights confirmation is required.',
+              error: 'Compliance requirement: Activate your standing content-rights declaration in Settings or confirm rights.',
             }),
             { status: 400, headers: jsonHeaders }
           );
@@ -431,7 +432,7 @@ export default {
             driveFileId: body.driveFileId,
             captionOverride: body.captionOverride,
             visibility: body.visibility || 'public',
-            confirmedRights: Boolean(body.confirmedRights),
+            confirmedRights: Boolean(body.confirmedRights || standingRightsActive),
           },
           { sandbox: Boolean(body.sandbox) }
         );

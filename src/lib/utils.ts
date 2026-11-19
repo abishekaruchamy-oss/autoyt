@@ -123,12 +123,13 @@ export function getJobStatusBadge(status: string): {
         border: 'border-emerald-500/20',
         label: 'Live on Shorts',
       };
+    case 'VERIFYING_YOUTUBE_PUBLICATION':
     case 'VERIFYING_UPLOAD':
       return {
         bg: 'bg-teal-500/10',
         text: 'text-teal-400',
         border: 'border-teal-500/20',
-        label: 'Verifying Upload',
+        label: 'Verifying Public Upload',
       };
     case 'UPLOADING_TO_YOUTUBE':
     case 'UPLOADING_YOUTUBE':
@@ -138,6 +139,13 @@ export function getJobStatusBadge(status: string): {
         border: 'border-blue-500/20',
         label: 'Uploading to YouTube',
       };
+    case 'PREPARING_YOUTUBE_METADATA':
+      return {
+        bg: 'bg-blue-500/10',
+        text: 'text-blue-300',
+        border: 'border-blue-500/20',
+        label: 'Preparing Metadata',
+      };
     case 'STORED_IN_DRIVE':
     case 'STORED_DRIVE':
       return {
@@ -145,6 +153,13 @@ export function getJobStatusBadge(status: string): {
         text: 'text-cyan-400',
         border: 'border-cyan-500/20',
         label: 'Saved to Drive',
+      };
+    case 'VERIFYING_DRIVE_ARCHIVE':
+      return {
+        bg: 'bg-cyan-500/10',
+        text: 'text-cyan-300',
+        border: 'border-cyan-500/20',
+        label: 'Verifying Drive Archive',
       };
     case 'ARCHIVING_TO_DRIVE':
       return {
@@ -160,6 +175,13 @@ export function getJobStatusBadge(status: string): {
         border: 'border-emerald-500/20',
         label: 'Media Ready',
       };
+    case 'VALIDATING_MEDIA':
+      return {
+        bg: 'bg-purple-500/10',
+        text: 'text-purple-300',
+        border: 'border-purple-500/20',
+        label: 'Validating MP4 Stream',
+      };
     case 'WAITING_FOR_AUTHORIZED_MEDIA':
       return {
         bg: 'bg-amber-500/10',
@@ -174,6 +196,21 @@ export function getJobStatusBadge(status: string): {
         border: 'border-purple-500/20',
         label: 'Resolving Media',
       };
+    case 'RESOLVING_CREATOR':
+      return {
+        bg: 'bg-purple-500/10',
+        text: 'text-purple-300',
+        border: 'border-purple-500/20',
+        label: 'Resolving Creator',
+      };
+    case 'CHECKING_RIGHTS_POLICY':
+      return {
+        bg: 'bg-purple-500/10',
+        text: 'text-purple-300',
+        border: 'border-purple-500/20',
+        label: 'Checking Rights Policy',
+      };
+    case 'VALIDATING_URL':
     case 'VALIDATING':
       return {
         bg: 'bg-purple-500/10',
@@ -181,12 +218,13 @@ export function getJobStatusBadge(status: string): {
         border: 'border-purple-500/20',
         label: 'Validating URL',
       };
+    case 'RECEIVED':
     case 'SUBMITTED':
       return {
         bg: 'bg-zinc-500/10',
         text: 'text-zinc-300',
         border: 'border-zinc-500/20',
-        label: 'Submitted',
+        label: 'Received',
       };
     case 'DOWNLOADING':
       return {

@@ -340,17 +340,7 @@ export function UploadHistoryTable({
                             <Info className="w-4 h-4" />
                           </button>
                           {(job.status === 'WAITING_FOR_AUTHORIZED_MEDIA' ||
-                            (job.status === 'FAILED' && !job.drive_file_id)) && (
-                            <button
-                              type="button"
-                              onClick={() => openAttachModal(job)}
-                              className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
-                            >
-                              <UploadCloud className="w-3 h-3" />
-                              <span>Attach Media</span>
-                            </button>
-                          )}
-                          {((job.status === 'FAILED' && Boolean(job.drive_file_id)) ||
+                            job.status === 'FAILED' ||
                             job.status === 'AMBIGUOUS_UPLOAD') && (
                             <button
                               type="button"
@@ -359,7 +349,13 @@ export function UploadHistoryTable({
                               className="px-2.5 py-1 bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors disabled:opacity-50"
                             >
                               <RotateCcw className={`w-3 h-3 ${isRetrying ? 'animate-spin' : ''}`} />
-                              <span>{isRetrying ? 'Retrying...' : job.status === 'AMBIGUOUS_UPLOAD' ? 'Reconcile' : 'Retry'}</span>
+                              <span>
+                                {isRetrying
+                                  ? 'Processing...'
+                                  : job.status === 'AMBIGUOUS_UPLOAD'
+                                  ? 'Reconcile'
+                                  : 'Retry Auto'}
+                              </span>
                             </button>
                           )}
                         </div>
@@ -456,17 +452,7 @@ export function UploadHistoryTable({
                   </div>
 
                   {(job.status === 'WAITING_FOR_AUTHORIZED_MEDIA' ||
-                    (job.status === 'FAILED' && !job.drive_file_id)) && (
-                    <button
-                      type="button"
-                      onClick={() => openAttachModal(job)}
-                      className="px-3 py-1 bg-amber-600 text-white rounded-lg text-xs font-semibold flex items-center gap-1 shadow-sm"
-                    >
-                      <UploadCloud className="w-3 h-3" />
-                      <span>Attach Media</span>
-                    </button>
-                  )}
-                  {((job.status === 'FAILED' && Boolean(job.drive_file_id)) ||
+                    job.status === 'FAILED' ||
                     job.status === 'AMBIGUOUS_UPLOAD') && (
                     <button
                       type="button"
@@ -475,7 +461,13 @@ export function UploadHistoryTable({
                       className="px-3 py-1 bg-rose-600 text-white rounded-lg text-xs font-semibold flex items-center gap-1 shadow-sm disabled:opacity-50"
                     >
                       <RotateCcw className={`w-3 h-3 ${isRetrying ? 'animate-spin' : ''}`} />
-                      <span>{isRetrying ? 'Retrying...' : job.status === 'AMBIGUOUS_UPLOAD' ? 'Reconcile' : 'Retry'}</span>
+                      <span>
+                        {isRetrying
+                          ? 'Processing...'
+                          : job.status === 'AMBIGUOUS_UPLOAD'
+                          ? 'Reconcile'
+                          : 'Retry Auto'}
+                      </span>
                     </button>
                   )}
                 </div>

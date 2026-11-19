@@ -9,19 +9,28 @@ export type ProfileMonitoringStatus =
 export type AccountStatus = 'ACTIVE' | 'EXPIRED' | 'DISCONNECTED' | 'ERROR';
 
 export type JobStatus =
-  | 'SUBMITTED'
-  | 'VALIDATING'
+  // Phase 11.0 Durable Stage-Based Pipeline
+  | 'RECEIVED'
+  | 'VALIDATING_URL'
+  | 'CHECKING_RIGHTS_POLICY'
+  | 'RESOLVING_CREATOR'
   | 'RESOLVING_MEDIA'
+  | 'VALIDATING_MEDIA'
   | 'MEDIA_AVAILABLE'
-  | 'WAITING_FOR_AUTHORIZED_MEDIA'
   | 'ARCHIVING_TO_DRIVE'
+  | 'VERIFYING_DRIVE_ARCHIVE'
   | 'STORED_IN_DRIVE'
+  | 'PREPARING_YOUTUBE_METADATA'
   | 'UPLOADING_TO_YOUTUBE'
-  | 'VERIFYING_UPLOAD'
+  | 'VERIFYING_YOUTUBE_PUBLICATION'
   | 'COMPLETED'
   | 'FAILED'
   | 'AMBIGUOUS_UPLOAD'
-  // Legacy aliases
+  | 'WAITING_FOR_AUTHORIZED_MEDIA'
+  // Legacy aliases retained for compatibility
+  | 'SUBMITTED'
+  | 'VALIDATING'
+  | 'VERIFYING_UPLOAD'
   | 'DETECTED'
   | 'DOWNLOADING'
   | 'STORED_DRIVE'
@@ -35,8 +44,19 @@ export interface ReelSubmissionPayload {
   driveFileId?: string;
   captionOverride?: string;
   visibility?: PublishingVisibility;
-  confirmedRights: boolean;
+  confirmedRights?: boolean;
   sandbox?: boolean;
+}
+
+export interface OperatorRightsDeclaration {
+  id: string;
+  operator_identity: string;
+  policy_version: string;
+  status: 'ACTIVE' | 'REVOKED';
+  declaration_text: string;
+  declared_at: string;
+  revoked_at: string | null;
+  updated_at: string;
 }
 
 /**
@@ -130,6 +150,11 @@ export interface UploadJob {
   shortcode?: string;
   rights_confirmed?: boolean;
   media_source_type?: string;
+  resolved_provider?: string | null;
+  media_duration_seconds?: number | null;
+  media_size_bytes?: number | null;
+  youtube_privacy_status?: string | null;
+  stage_retries_json?: string | null;
   created_at: string;
   updated_at: string;
 }

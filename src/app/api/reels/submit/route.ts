@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAdminApi } from '@/lib/auth';
 import { NO_STORE_HEADERS, sanitizeErrorMessage, sanitizeUploadJobForApi } from '@/lib/security';
 import { PipelineService } from '@/server/services/pipelineService';
+import { Repository } from '@/server/db/repository';
 import { ReelSubmissionPayload } from '@/types';
 import { extractReelShortcode } from '@/server/media/MediaResolver';
 
@@ -43,13 +44,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 2. Mandatory Copyright / Distribution Rights Confirmation Check
-    if (!confirmedRights) {
+    // 2. Mandatory Copyright / Distribution Rights Policy Check (Standing Declaration OR explicit per-request confirmation)
+    const standingRightsActive = await Repository.hasActiveRightsDeclaration();
+    if (!confirmedRights && !standingRightsActive) {
       return NextResponse.json(
         {
           success: false,
           error:
-            'Compliance requirement: You must confirm video ownership or authorized creator republishing rights before processing.',
+            'Compliance requirement: Activate your standing content-rights declaration in Settings or confirm rights before processing.',
         },
         { status: 400, headers: NO_STORE_HEADERS }
       );
@@ -61,7 +63,7 @@ export async function POST(request: NextRequest) {
       driveFileId: driveFileId || undefined,
       captionOverride: captionOverride || undefined,
       visibility: visibility || 'public',
-      confirmedRights: Boolean(confirmedRights),
+      confirmedRights: Boolean(confirmedRights || standingRightsActive),
     };
 
     const job = await PipelineService.processSubmission(payload, {

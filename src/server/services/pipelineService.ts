@@ -25,8 +25,24 @@ import {
   DashboardMetrics,
 } from '@/types';
 import { extractReelShortcode, MediaResolver } from '../media/MediaResolver';
+import {
+  isInstagramWebpageUrl,
+  probeUpstreamVideoStream,
+  verifyMp4ContainerSignature,
+  redactMediaUrl,
+} from '../media/streamValidation';
 import { encryptToken, decryptToken } from '@/lib/crypto';
 import { formatBytes } from '@/lib/utils';
+
+function buildAttributedCaption(rawCaption: string | undefined, username: string, shortcode: string): string {
+  const cleanUser = (username || 'creator').replace(/^@/, '').trim() || 'creator';
+  const base = (rawCaption || '').trim() || `Instagram Reel #${shortcode}`;
+  if (cleanUser === 'creator') return base;
+  if (base.toLowerCase().includes(`@${cleanUser.toLowerCase()}`)) {
+    return base;
+  }
+  return `${base} | Credit: @${cleanUser}`;
+}
 
 export interface PipelineSyncOptions {
   profileId?: string;
@@ -509,55 +525,75 @@ export class PipelineService {
       // When a Drive backup exists, use the authenticated Drive download stream as the retry source
       let videoSourceUrl: string;
       let sourceHeaders: Record<string, string> | undefined = undefined;
+      let resolvedUsername = authorUsername;
+      let resolvedCaption = targetCaption;
+      const fileShortcode = job.shortcode || job.reel_id.replace(/^reel_/, '');
 
       if (job.drive_file_id) {
         videoSourceUrl = GoogleDriveService.getMediaDownloadUrl(job.drive_file_id);
         sourceHeaders = GoogleDriveService.getAuthHeaders(driveToken);
       } else {
-        // Need to archive to Drive first
-        const isInstagramWebpageUrl = (candidate: string): boolean => {
-          try {
-            const parsed = new URL(candidate);
-            const host = parsed.hostname.toLowerCase();
-            return (
-              (host === 'instagram.com' || host === 'www.instagram.com' || host.endsWith('.instagram.com')) &&
-              !parsed.pathname.toLowerCase().endsWith('.mp4')
-            );
-          } catch {
-            return false;
-          }
-        };
+        // Automatically resolve direct MP4 media stream (or validate admin-supplied recovery URL)
+        await Repository.updateUploadJob(jobId, { status: 'RESOLVING_MEDIA' });
 
-        let sourceUrlToArchive = job.original_reel_url;
-
-        if (options?.directVideoUrl) {
-          if (isInstagramWebpageUrl(options.directVideoUrl)) {
-            throw new Error(
-              'Direct MP4 stream URL cannot be an instagram.com webpage URL. Provide a verified direct CDN .mp4 stream URL.'
-            );
-          }
-          const resolution = await MediaResolver.resolveReel(job.original_reel_url, {
-            directVideoUrl: options.directVideoUrl,
-            confirmedRights: true,
-            caption: targetCaption,
-            username: authorUsername,
-          });
-          if (!resolution.success || !resolution.mediaUrl) {
-            throw new Error(resolution.reason || 'Failed to resolve provided direct video URL.');
-          }
-          sourceUrlToArchive = resolution.mediaUrl;
-        } else if (isInstagramWebpageUrl(sourceUrlToArchive)) {
+        if (options?.directVideoUrl && isInstagramWebpageUrl(options.directVideoUrl)) {
           throw new Error(
-            'A verified direct MP4 stream URL is required to resume this job before Google Drive archival. Click "Attach Media" and paste the direct CDN .mp4 URL.'
+            'Direct MP4 stream URL cannot be an instagram.com webpage URL. Provide a verified direct CDN .mp4 stream URL.'
           );
         }
+
+        const resolution = await MediaResolver.resolveReel(job.original_reel_url, {
+          directVideoUrl: options?.directVideoUrl,
+          confirmedRights: true,
+          caption: options?.captionOverride,
+          username: authorUsername !== 'creator' ? authorUsername : undefined,
+        });
+
+        if (!resolution.success || !resolution.mediaUrl || isInstagramWebpageUrl(resolution.mediaUrl)) {
+          throw new Error(
+            resolution.reason ||
+              'Automated media resolution could not retrieve a valid direct MP4 stream for this Reel.'
+          );
+        }
+
+        const sourceUrlToArchive = resolution.mediaUrl;
+        resolvedUsername =
+          resolution.username && resolution.username !== 'creator'
+            ? resolution.username
+            : authorUsername;
+        resolvedCaption = buildAttributedCaption(
+          options?.captionOverride || resolution.caption || job.caption,
+          resolvedUsername,
+          fileShortcode
+        );
+
+        await Repository.updateUploadJob(jobId, {
+          status: 'VALIDATING_MEDIA',
+          account_username: resolvedUsername,
+          caption: resolvedCaption,
+          thumbnail_url: resolution.thumbnailUrl || job.thumbnail_url,
+          resolved_provider: resolution.provider,
+          media_duration_seconds: resolution.durationSeconds ?? null,
+        });
+
+        // Validate HTTP 200/206, Content-Type video/mp4, Content-Length, and MP4 ftyp atom
+        const [streamProbe] = await Promise.all([
+          probeUpstreamVideoStream(sourceUrlToArchive),
+          verifyMp4ContainerSignature(sourceUrlToArchive),
+        ]);
+
+        await Repository.updateUploadJob(jobId, {
+          status: 'MEDIA_AVAILABLE',
+          media_size_bytes: streamProbe.totalBytes,
+          media_source_type: options?.directVideoUrl ? 'USER_DIRECT_STREAM' : resolution.provider,
+          error_details: null,
+        });
 
         const folderId = await GoogleDriveService.getOrCreateFolder(
           automation.drive_folder_name,
           driveToken
         );
-        const fileShortcode = job.shortcode || job.reel_id.replace(/^reel_/, '');
-        const fileName = `reel_${fileShortcode}_${authorUsername}.mp4`;
+        const fileName = `reel_${fileShortcode}_${resolvedUsername}.mp4`;
 
         await Repository.updateUploadJob(jobId, { status: 'ARCHIVING_TO_DRIVE' });
         const driveRes = await GoogleDriveService.streamVideoToDrive(
@@ -566,38 +602,57 @@ export class PipelineService {
           folderId,
           driveToken
         );
+
+        await Repository.updateUploadJob(jobId, { status: 'VERIFYING_DRIVE_ARCHIVE' });
+        const driveMeta = await GoogleDriveService.getFileMetadata(driveRes.fileId, driveToken);
+        if (driveMeta.trashed || driveMeta.sizeBytes <= 0) {
+          throw new Error(
+            `Google Drive archive verification failed for file ${driveRes.fileId} (size=${driveMeta.sizeBytes}, trashed=${driveMeta.trashed}).`
+          );
+        }
+
         await Repository.updateUploadJob(jobId, {
           drive_file_id: driveRes.fileId,
           drive_file_url: driveRes.webViewLink || `https://drive.google.com/file/d/${driveRes.fileId}/view`,
           status: 'STORED_IN_DRIVE',
-          account_username: authorUsername,
-          caption: targetCaption,
-          media_source_type: options?.directVideoUrl ? 'USER_DIRECT_STREAM' : job.media_source_type,
+          account_username: resolvedUsername,
+          caption: resolvedCaption,
+          media_size_bytes: driveMeta.sizeBytes,
         });
 
         await Repository.logActivity(
           'DRIVE_UPLOAD',
-          `Archived Reel #${fileShortcode} to Google Drive folder "${automation.drive_folder_name}"`,
-          authorUsername,
-          { fileId: driveRes.fileId, fileName }
+          `Archived and verified Reel #${fileShortcode} (${driveMeta.sizeBytes} bytes) in Google Drive folder "${automation.drive_folder_name}"`,
+          resolvedUsername,
+          {
+            fileId: driveRes.fileId,
+            fileName,
+            sizeBytes: driveMeta.sizeBytes,
+            provider: resolution.provider,
+            redactedSource: redactMediaUrl(sourceUrlToArchive),
+          }
         );
 
-        videoSourceUrl = sourceUrlToArchive.startsWith('http') && !sourceUrlToArchive.includes('drive.google.com')
-          ? sourceUrlToArchive
-          : GoogleDriveService.getMediaDownloadUrl(driveRes.fileId);
-        sourceHeaders = sourceUrlToArchive === videoSourceUrl
-          ? undefined
-          : GoogleDriveService.getAuthHeaders(driveToken);
+        // Stream YouTube upload directly from the verified durable Google Drive archive
+        videoSourceUrl = GoogleDriveService.getMediaDownloadUrl(driveRes.fileId);
+        sourceHeaders = GoogleDriveService.getAuthHeaders(driveToken);
       }
 
-      // 3. Upload to YouTube using authenticated stream & session tracking
-      await Repository.updateUploadJob(jobId, { status: 'UPLOADING_TO_YOUTUBE' });
+      // 3. Prepare YouTube metadata & upload using authenticated Drive stream + session tracking
+      await Repository.updateUploadJob(jobId, { status: 'PREPARING_YOUTUBE_METADATA' });
+      const finalCaption = buildAttributedCaption(resolvedCaption, resolvedUsername, fileShortcode);
+
+      await Repository.updateUploadJob(jobId, {
+        status: 'UPLOADING_TO_YOUTUBE',
+        caption: finalCaption,
+        account_username: resolvedUsername,
+      });
 
       const ytResult = await YouTubeService.streamVideoToYouTube(
         videoSourceUrl,
         {
-          caption: targetCaption,
-          username: authorUsername,
+          caption: finalCaption,
+          username: resolvedUsername,
           privacyStatus: targetVisibility,
         },
         youtubeToken,
@@ -614,13 +669,33 @@ export class PipelineService {
         }
       );
 
-      await Repository.updateUploadJob(jobId, { status: 'VERIFYING_UPLOAD' });
+      await Repository.updateUploadJob(jobId, { status: 'VERIFYING_YOUTUBE_PUBLICATION' });
+      let verifiedPrivacy = targetVisibility;
+      try {
+        const ytDetails = await YouTubeService.getVideoDetails(ytResult.videoId, youtubeToken);
+        if (ytDetails.privacyStatus) {
+          verifiedPrivacy = ytDetails.privacyStatus as typeof targetVisibility;
+          if (targetVisibility === 'public' && ytDetails.privacyStatus !== 'public') {
+            throw new Error(
+              `YouTube published video ${ytResult.videoId} with privacyStatus="${ytDetails.privacyStatus}" instead of required "public".`
+            );
+          }
+        }
+      } catch (verifyErr) {
+        if (
+          process.env.NODE_ENV === 'production' ||
+          (verifyErr instanceof Error && verifyErr.message.includes('instead of required "public"'))
+        ) {
+          throw verifyErr;
+        }
+      }
 
       const finalSession = ytResult.sessionUri || currentSessionUri;
       const finalJob = await Repository.updateUploadJob(jobId, {
         status: 'COMPLETED',
         youtube_video_id: ytResult.videoId,
         youtube_video_url: ytResult.videoUrl,
+        youtube_privacy_status: verifiedPrivacy,
         encrypted_youtube_upload_session_uri: finalSession ? encryptToken(finalSession) : null,
         completed_at: new Date().toISOString(),
         error_details: null,
@@ -672,10 +747,11 @@ export class PipelineService {
     payload: ReelSubmissionPayload,
     options?: { sandbox?: boolean; mockStream?: boolean }
   ): Promise<UploadJob> {
-    // 1. Mandatory Rights Confirmation Check
-    if (!payload.confirmedRights) {
+    // 1. Mandatory Rights Confirmation Check (standing account-level declaration OR per-request confirmation)
+    const standingRightsActive = await Repository.hasActiveRightsDeclaration();
+    if (!payload.confirmedRights && !standingRightsActive) {
       throw new Error(
-        'Compliance requirement: Creator copyright or distribution rights confirmation is required before processing.'
+        'Compliance requirement: Creator copyright or distribution rights confirmation is required before processing (activate standing declaration in Settings or confirm rights).'
       );
     }
 
@@ -695,7 +771,9 @@ export class PipelineService {
         existing.status === 'COMPLETED' ||
         existing.status === 'STORED_IN_DRIVE' ||
         existing.status === 'ARCHIVING_TO_DRIVE' ||
+        existing.status === 'VERIFYING_DRIVE_ARCHIVE' ||
         existing.status === 'UPLOADING_TO_YOUTUBE' ||
+        existing.status === 'VERIFYING_YOUTUBE_PUBLICATION' ||
         existing.youtube_video_id
       ) {
         return existing;
@@ -709,30 +787,15 @@ export class PipelineService {
     }
 
     // 3b. Reject Instagram webpage URLs supplied as directVideoUrl
-    if (payload.directVideoUrl) {
-      try {
-        const parsedDirect = new URL(payload.directVideoUrl);
-        const directHost = parsedDirect.hostname.toLowerCase();
-        if (
-          (directHost === 'instagram.com' ||
-            directHost === 'www.instagram.com' ||
-            directHost.endsWith('.instagram.com')) &&
-          !parsedDirect.pathname.toLowerCase().endsWith('.mp4')
-        ) {
-          throw new Error(
-            'Direct MP4 stream URL cannot be an instagram.com webpage URL. Provide a verified direct CDN .mp4 stream URL.'
-          );
-        }
-      } catch (urlErr) {
-        if (urlErr instanceof Error && urlErr.message.includes('Direct MP4 stream URL')) {
-          throw urlErr;
-        }
-      }
+    if (payload.directVideoUrl && isInstagramWebpageUrl(payload.directVideoUrl)) {
+      throw new Error(
+        'Direct MP4 stream URL cannot be an instagram.com webpage URL. Provide a verified direct CDN .mp4 stream URL.'
+      );
     }
 
-    // 4. Create initial job record in SUBMITTED state (reusing existing job if in pending/waiting/failed state to prevent duplicates)
+    // 4. Create initial job record in RECEIVED state (reusing existing pending/waiting/failed job to prevent duplicates)
     const handleMatch = payload.captionOverride?.match(/@([A-Za-z0-9_.]{1,30})/);
-    const authorUsername =
+    const initialUsername =
       (handleMatch ? handleMatch[1] : null) ||
       (existing?.account_username && existing.account_username !== 'creator'
         ? existing.account_username
@@ -741,15 +804,15 @@ export class PipelineService {
     let job: UploadJob;
     if (existing) {
       job = (await Repository.updateUploadJob(existing.id, {
-        status: 'SUBMITTED',
+        status: 'RECEIVED',
         caption: payload.captionOverride || existing.caption,
-        account_username: authorUsername,
+        account_username: initialUsername,
         rights_confirmed: true,
         media_source_type: payload.directVideoUrl
           ? 'USER_DIRECT_STREAM'
           : payload.driveFileId
           ? 'GOOGLE_DRIVE_SOURCE'
-          : 'PUBLIC_PROBE',
+          : 'PUBLIC_IG_NATIVE',
         error_details: null,
       })) || existing;
     } else {
@@ -758,29 +821,31 @@ export class PipelineService {
         shortcode,
         original_reel_url: canonicalUrl || `https://www.instagram.com/reel/${shortcode}/`,
         caption: payload.captionOverride || `Reel #${shortcode}`,
-        account_username: authorUsername,
-        status: 'SUBMITTED',
+        account_username: initialUsername,
+        status: 'RECEIVED',
         rights_confirmed: true,
         media_source_type: payload.directVideoUrl
           ? 'USER_DIRECT_STREAM'
           : payload.driveFileId
           ? 'GOOGLE_DRIVE_SOURCE'
-          : 'PUBLIC_PROBE',
+          : 'PUBLIC_IG_NATIVE',
       });
     }
 
-    // 5. State: VALIDATING -> RESOLVING_MEDIA
-    await Repository.updateUploadJob(job.id, { status: 'VALIDATING' });
+    // 5. Durable Stage Progression: VALIDATING_URL -> CHECKING_RIGHTS_POLICY -> RESOLVING_CREATOR -> RESOLVING_MEDIA
+    await Repository.updateUploadJob(job.id, { status: 'VALIDATING_URL' });
+    await Repository.updateUploadJob(job.id, { status: 'CHECKING_RIGHTS_POLICY' });
+    await Repository.updateUploadJob(job.id, { status: 'RESOLVING_CREATOR' });
     await Repository.updateUploadJob(job.id, { status: 'RESOLVING_MEDIA' });
 
-    // 6. Media Resolution
+    // 6. Automated Media Resolution (no manual direct MP4 URL required)
     const resolution = await MediaResolver.resolveReel(payload.reelUrl, {
       directVideoUrl: payload.directVideoUrl,
       driveFileId: payload.driveFileId,
-      confirmedRights: payload.confirmedRights,
+      confirmedRights: true,
       sandbox: options?.sandbox,
       caption: payload.captionOverride,
-      username: authorUsername,
+      username: initialUsername !== 'creator' ? initialUsername : undefined,
     });
 
     if (resolution.status === 'WAITING_FOR_AUTHORIZED_MEDIA') {
@@ -789,14 +854,15 @@ export class PipelineService {
         account_username: resolution.username || job.account_username,
         caption: payload.captionOverride || resolution.caption || job.caption,
         thumbnail_url: resolution.thumbnailUrl || job.thumbnail_url,
+        resolved_provider: resolution.provider,
         error_details: resolution.reason,
       });
 
       await Repository.logActivity(
         'PROFILE_CHECKED',
-        `Reel #${shortcode} queued: Waiting for creator-authorized media stream`,
+        `Reel #${shortcode} queued: Waiting for authorized media stream (${resolution.provider})`,
         resolution.username || 'creator',
-        { shortcode, reason: resolution.reason }
+        { shortcode, provider: resolution.provider, reason: resolution.reason }
       );
 
       return waitingJob!;
@@ -806,10 +872,12 @@ export class PipelineService {
       resolution.status === 'NOT_FOUND' ||
       resolution.status === 'ERROR' ||
       resolution.status === 'ACCESS_RESTRICTED' ||
-      !resolution.success
+      !resolution.success ||
+      !resolution.mediaUrl
     ) {
       const failedJob = await Repository.updateUploadJob(job.id, {
         status: 'FAILED',
+        resolved_provider: resolution.provider,
         error_details: resolution.reason,
       });
 
@@ -822,16 +890,62 @@ export class PipelineService {
       return failedJob!;
     }
 
-    // Resolution was MEDIA_AVAILABLE
+    const resolvedUsername =
+      resolution.username && resolution.username !== 'creator'
+        ? resolution.username
+        : initialUsername;
+    const attributedCaption = buildAttributedCaption(
+      payload.captionOverride || resolution.caption || job.caption,
+      resolvedUsername,
+      shortcode
+    );
+
+    // 6b. Stage: VALIDATING_MEDIA (strict upstream HTTP 200/206, Content-Type, size, and MP4 ftyp verification in live mode)
+    await Repository.updateUploadJob(job.id, {
+      status: 'VALIDATING_MEDIA',
+      account_username: resolvedUsername,
+      caption: attributedCaption,
+      thumbnail_url: resolution.thumbnailUrl || job.thumbnail_url,
+      resolved_provider: resolution.provider,
+      media_duration_seconds: resolution.durationSeconds ?? null,
+    });
+
+    let verifiedSizeBytes = resolution.sizeBytes ?? null;
+    if (!options?.sandbox && resolution.provider !== 'SANDBOX' && !options?.mockStream) {
+      try {
+        const [probe] = await Promise.all([
+          probeUpstreamVideoStream(resolution.mediaUrl),
+          verifyMp4ContainerSignature(resolution.mediaUrl),
+        ]);
+        verifiedSizeBytes = probe.totalBytes;
+      } catch (valErr) {
+        const reason = valErr instanceof Error ? valErr.message : String(valErr);
+        const failedJob = await Repository.updateUploadJob(job.id, {
+          status: 'FAILED',
+          error_details: reason,
+        });
+        await Repository.logActivity(
+          'UPLOAD_FAILED',
+          `Reel #${shortcode} media validation failed: ${reason}`,
+          resolvedUsername
+        );
+        return failedJob!;
+      }
+    }
+
+    // Resolution & Validation succeeded -> MEDIA_AVAILABLE (signed URL NEVER persisted in D1)
     await Repository.updateUploadJob(job.id, {
       status: 'MEDIA_AVAILABLE',
-      account_username: resolution.username || job.account_username,
-      caption: payload.captionOverride || resolution.caption || job.caption,
+      account_username: resolvedUsername,
+      caption: attributedCaption,
       thumbnail_url: resolution.thumbnailUrl || job.thumbnail_url,
+      resolved_provider: resolution.provider,
+      media_source_type: payload.directVideoUrl ? 'USER_DIRECT_STREAM' : resolution.provider,
+      media_size_bytes: verifiedSizeBytes,
       error_details: null,
     });
 
-    // 7. Check Google Connections (Drive + YouTube)
+    // 7. Check Google Connections (Independent Drive + YouTube credentials)
     const [driveConnected, youtubeConnected] = await Promise.all([
       isDriveConnected(),
       isYouTubeConnected(),
@@ -867,7 +981,7 @@ export class PipelineService {
       return awaitingJob!;
     }
 
-    // 8. Streaming Transfer Pipeline (Zero Local SSD Disk Consumption)
+    // 8. Cloud-to-Cloud Streaming Transfer Pipeline (Zero Local SSD Disk Consumption)
     const automation = await Repository.getAutomationSettings();
     const visibility = payload.visibility || automation.default_visibility || 'public';
     const folderName = automation.drive_folder_name || 'Instagram Reels Backup';
@@ -887,14 +1001,27 @@ export class PipelineService {
       // Step A: Archive to Google Drive
       await Repository.updateUploadJob(job.id, { status: 'ARCHIVING_TO_DRIVE' });
       const folderId = await GoogleDriveService.getOrCreateFolder(folderName, driveToken);
-      const driveFileName = `reel_${shortcode}_${resolution.username || job.account_username || 'zackdfilms'}.mp4`;
+      const driveFileName = `reel_${shortcode}_${resolvedUsername}.mp4`;
 
       const driveResult = await GoogleDriveService.streamVideoToDrive(
-        resolution.mediaUrl!,
+        resolution.mediaUrl,
         driveFileName,
         folderId,
         driveToken
       );
+
+      // Step A2: Verify Google Drive archive exists and is non-empty
+      await Repository.updateUploadJob(job.id, { status: 'VERIFYING_DRIVE_ARCHIVE' });
+      let archivedBytes = driveResult.sizeBytes ?? verifiedSizeBytes ?? null;
+      if (!options?.sandbox) {
+        const driveMeta = await GoogleDriveService.getFileMetadata(driveResult.fileId, driveToken);
+        if (driveMeta.trashed || driveMeta.sizeBytes <= 0) {
+          throw new Error(
+            `Google Drive archive verification failed for file ${driveResult.fileId} (size=${driveMeta.sizeBytes}, trashed=${driveMeta.trashed}).`
+          );
+        }
+        archivedBytes = driveMeta.sizeBytes;
+      }
 
       await Repository.updateUploadJob(job.id, {
         status: 'STORED_IN_DRIVE',
@@ -902,27 +1029,39 @@ export class PipelineService {
         drive_file_url:
           driveResult.webViewLink ||
           `https://drive.google.com/file/d/${driveResult.fileId}/view`,
+        media_size_bytes: archivedBytes,
       });
 
       await Repository.logActivity(
         'DRIVE_UPLOAD',
-        `Archived Reel #${shortcode} to Google Drive folder "${folderName}"`,
-        resolution.username || job.account_username || 'zackdfilms',
-        { fileId: driveResult.fileId, fileName: driveFileName }
+        `Archived and verified Reel #${shortcode} in Google Drive folder "${folderName}"`,
+        resolvedUsername,
+        {
+          fileId: driveResult.fileId,
+          fileName: driveFileName,
+          sizeBytes: archivedBytes,
+          provider: resolution.provider,
+          redactedSource: redactMediaUrl(resolution.mediaUrl),
+        }
       );
 
-      // Step B: Upload to YouTube Shorts
+      // Step B: Prepare YouTube Metadata & Upload directly from verified Google Drive archive
+      await Repository.updateUploadJob(job.id, { status: 'PREPARING_YOUTUBE_METADATA' });
       await Repository.updateUploadJob(job.id, { status: 'UPLOADING_TO_YOUTUBE' });
 
+      const ytStreamUrl = GoogleDriveService.getMediaDownloadUrl(driveResult.fileId);
+      const ytStreamHeaders = GoogleDriveService.getAuthHeaders(driveToken);
+
       const ytResult = await YouTubeService.streamVideoToYouTube(
-        resolution.mediaUrl!,
+        ytStreamUrl,
         {
-          caption: payload.captionOverride || resolution.caption || `Reel #${shortcode}`,
-          username: resolution.username || job.account_username || 'zackdfilms',
+          caption: attributedCaption,
+          username: resolvedUsername,
           privacyStatus: visibility,
         },
         youtubeToken,
         {
+          sourceHeaders: ytStreamHeaders,
           onSessionInitiated: async (sessionUri) => {
             const enc = sessionUri ? encryptToken(sessionUri) : null;
             await Repository.updateUploadJob(job.id, {
@@ -932,12 +1071,35 @@ export class PipelineService {
         }
       );
 
-      await Repository.updateUploadJob(job.id, { status: 'VERIFYING_UPLOAD' });
+      // Step C: Verify YouTube publication & explicit PUBLIC privacyStatus
+      await Repository.updateUploadJob(job.id, { status: 'VERIFYING_YOUTUBE_PUBLICATION' });
+      let verifiedPrivacy = visibility;
+      if (!options?.sandbox) {
+        try {
+          const ytDetails = await YouTubeService.getVideoDetails(ytResult.videoId, youtubeToken);
+          if (ytDetails.privacyStatus) {
+            verifiedPrivacy = ytDetails.privacyStatus as typeof visibility;
+            if (visibility === 'public' && ytDetails.privacyStatus !== 'public') {
+              throw new Error(
+                `YouTube published video ${ytResult.videoId} with privacyStatus="${ytDetails.privacyStatus}" instead of required "public".`
+              );
+            }
+          }
+        } catch (verifyErr) {
+          if (
+            process.env.NODE_ENV === 'production' ||
+            (verifyErr instanceof Error && verifyErr.message.includes('instead of required "public"'))
+          ) {
+            throw verifyErr;
+          }
+        }
+      }
 
       const completedJob = await Repository.updateUploadJob(job.id, {
         status: 'COMPLETED',
         youtube_video_id: ytResult.videoId,
         youtube_video_url: ytResult.videoUrl,
+        youtube_privacy_status: verifiedPrivacy,
         encrypted_youtube_upload_session_uri: ytResult.sessionUri ? encryptToken(ytResult.sessionUri) : null,
         completed_at: new Date().toISOString(),
         error_details: null,
@@ -949,9 +1111,9 @@ export class PipelineService {
 
       await Repository.logActivity(
         'YOUTUBE_UPLOAD',
-        `Published YouTube Short: "${ytResult.title}"`,
-        resolution.username || 'creator',
-        { videoId: ytResult.videoId, videoUrl: ytResult.videoUrl, visibility }
+        `Published YouTube Short (${verifiedPrivacy}): "${ytResult.title}"`,
+        resolvedUsername,
+        { videoId: ytResult.videoId, videoUrl: ytResult.videoUrl, visibility: verifiedPrivacy }
       );
 
       return completedJob!;

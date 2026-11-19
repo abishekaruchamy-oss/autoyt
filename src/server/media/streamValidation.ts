@@ -11,6 +11,116 @@ export interface ValidatedStreamMetadata {
   status: number;
 }
 
+export interface Mp4SignatureResult {
+  valid: boolean;
+  atomSize: number;
+  atomType: string;
+  majorBrand: string;
+  status: number;
+  contentType: string | null;
+}
+
+/**
+ * Returns true if the URL points to an Instagram HTML webpage (e.g. instagram.com/reel/...)
+ * rather than a direct video binary stream.
+ */
+export function isInstagramWebpageUrl(candidate: string): boolean {
+  try {
+    const parsed = new URL(candidate);
+    const host = parsed.hostname.toLowerCase();
+    return (
+      (host === 'instagram.com' ||
+        host === 'www.instagram.com' ||
+        host.endsWith('.instagram.com')) &&
+      !parsed.pathname.toLowerCase().endsWith('.mp4')
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Extracts expiration timestamp (ISO-8601 UTC) from a signed Meta CDN URL `oe` hex parameter,
+ * without exposing any query string secrets.
+ */
+export function extractSignedUrlExpiryIso(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl);
+    const oe = parsed.searchParams.get('oe');
+    if (!oe || !/^[0-9a-fA-F]+$/.test(oe)) return null;
+    const epochSeconds = parseInt(oe, 16);
+    if (!Number.isFinite(epochSeconds) || epochSeconds <= 0) return null;
+    return new Date(epochSeconds * 1000).toISOString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetches only the first 32 bytes (Range: bytes=0-31) of an upstream media URL
+ * to verify genuine MP4 container integrity (`ftyp` box) in RAM without downloading the file.
+ */
+export async function verifyMp4ContainerSignature(
+  sourceVideoUrl: string,
+  sourceHeaders?: Record<string, string>
+): Promise<Mp4SignatureResult> {
+  const safeUrl = redactMediaUrl(sourceVideoUrl);
+  if (isInstagramWebpageUrl(sourceVideoUrl)) {
+    throw new Error(
+      `Rejected Instagram webpage URL (${safeUrl}) — expected direct video/mp4 media stream.`
+    );
+  }
+
+  const res = await fetch(sourceVideoUrl, {
+    method: 'GET',
+    headers: {
+      ...(sourceHeaders || {}),
+      Range: 'bytes=0-31',
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(
+      `Upstream MP4 signature check failed (HTTP ${res.status}) for ${safeUrl}.`
+    );
+  }
+
+  const contentType = res.headers.get('content-type');
+  if (!isPermittedVideoContentType(contentType)) {
+    throw new Error(
+      `Invalid upstream media Content-Type "${contentType}" during MP4 signature check for ${safeUrl}.`
+    );
+  }
+
+  const buf = await res.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  if (bytes.byteLength < 12) {
+    throw new Error(
+      `Upstream stream returned fewer than 12 header bytes (${bytes.byteLength}) for ${safeUrl}.`
+    );
+  }
+
+  const atomSize =
+    ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]) >>> 0;
+  const atomType = String.fromCharCode(bytes[4], bytes[5], bytes[6], bytes[7]);
+  const majorBrand = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]);
+
+  if (atomType !== 'ftyp') {
+    throw new Error(
+      `Invalid MP4 container signature (got atom "${atomType}" instead of "ftyp") for ${safeUrl}.`
+    );
+  }
+
+  return {
+    valid: true,
+    atomSize,
+    atomType,
+    majorBrand,
+    status: res.status,
+    contentType,
+  };
+}
+
 /**
  * Redacts signed CDN query parameters so temporary bearer tokens are never
  * written to logs, errors, or diagnostics.

@@ -72,12 +72,20 @@ CREATE TABLE IF NOT EXISTS upload_jobs (
     youtube_video_id TEXT,
     youtube_video_url TEXT,
     encrypted_youtube_upload_session_uri TEXT,
-    status TEXT NOT NULL DEFAULT 'SUBMITTED' CHECK (status IN (
-        'SUBMITTED', 'VALIDATING', 'RESOLVING_MEDIA', 'MEDIA_AVAILABLE',
-        'WAITING_FOR_AUTHORIZED_MEDIA', 'ARCHIVING_TO_DRIVE', 'STORED_IN_DRIVE',
-        'UPLOADING_TO_YOUTUBE', 'VERIFYING_UPLOAD', 'COMPLETED', 'FAILED',
-        'AMBIGUOUS_UPLOAD',
+    resolved_provider TEXT,
+    media_duration_seconds REAL,
+    media_size_bytes INTEGER,
+    youtube_privacy_status TEXT,
+    stage_retries_json TEXT,
+    status TEXT NOT NULL DEFAULT 'RECEIVED' CHECK (status IN (
+        'RECEIVED', 'VALIDATING_URL', 'CHECKING_RIGHTS_POLICY', 'RESOLVING_CREATOR',
+        'RESOLVING_MEDIA', 'VALIDATING_MEDIA', 'MEDIA_AVAILABLE',
+        'ARCHIVING_TO_DRIVE', 'VERIFYING_DRIVE_ARCHIVE', 'STORED_IN_DRIVE',
+        'PREPARING_YOUTUBE_METADATA', 'UPLOADING_TO_YOUTUBE',
+        'VERIFYING_YOUTUBE_PUBLICATION', 'COMPLETED', 'FAILED',
+        'AMBIGUOUS_UPLOAD', 'WAITING_FOR_AUTHORIZED_MEDIA',
         -- Legacy status aliases
+        'SUBMITTED', 'VALIDATING', 'VERIFYING_UPLOAD',
         'DETECTED', 'DOWNLOADING', 'STORED_DRIVE', 'RETRYING'
     )),
     error_details TEXT,
@@ -153,6 +161,18 @@ CREATE TABLE IF NOT EXISTS oauth_states (
 );
 
 CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON oauth_states(expires_at);
+
+-- 9. Standing Operator Content-Rights Declarations (Phase 11.0)
+CREATE TABLE IF NOT EXISTS operator_rights_declarations (
+    id TEXT PRIMARY KEY,
+    operator_identity TEXT NOT NULL,
+    policy_version TEXT NOT NULL DEFAULT '1.0.0',
+    status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'REVOKED')),
+    declaration_text TEXT NOT NULL,
+    declared_at TEXT NOT NULL,
+    revoked_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
 -- Initial default records for serverless cold-start
 INSERT OR IGNORE INTO automation_settings (
