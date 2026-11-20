@@ -155,6 +155,9 @@ export interface UploadJob {
   media_size_bytes?: number | null;
   youtube_privacy_status?: string | null;
   stage_retries_json?: string | null;
+  youtube_title?: string | null;
+  youtube_description?: string | null;
+  youtube_tags_json?: string | null;
   created_at: string;
   updated_at: string;
 }

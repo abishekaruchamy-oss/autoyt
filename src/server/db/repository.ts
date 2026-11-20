@@ -942,6 +942,9 @@ export class Repository {
           : null,
       youtube_privacy_status: r.youtube_privacy_status ?? null,
       stage_retries_json: r.stage_retries_json ?? null,
+      youtube_title: r.youtube_title ?? null,
+      youtube_description: r.youtube_description ?? null,
+      youtube_tags_json: r.youtube_tags_json ?? null,
       created_at: r.created_at,
       updated_at: r.updated_at,
     };
@@ -1347,6 +1350,7 @@ export class Repository {
                 completed_at = ?, account_username = ?, media_source_type = ?,
                 rights_confirmed = ?, resolved_provider = ?, media_duration_seconds = ?,
                 media_size_bytes = ?, youtube_privacy_status = ?, stage_retries_json = ?,
+                youtube_title = ?, youtube_description = ?, youtube_tags_json = ?,
                 updated_at = ?
             WHERE id = ?
           `)
@@ -1370,38 +1374,81 @@ export class Repository {
             updated.media_size_bytes ?? null,
             updated.youtube_privacy_status ?? null,
             updated.stage_retries_json ?? null,
+            updated.youtube_title ?? null,
+            updated.youtube_description ?? null,
+            updated.youtube_tags_json ?? null,
             now,
             id
           )
           .run();
       } catch {
-        // Fallback for pre-0004 schemas
-        await d1
-          .prepare(`
-            UPDATE upload_jobs
-            SET caption = ?, thumbnail_url = ?, status = ?, drive_file_id = ?,
-                drive_file_url = ?, youtube_video_id = ?, youtube_video_url = ?,
-                encrypted_youtube_upload_session_uri = ?, error_details = ?, retry_count = ?,
-                completed_at = ?, account_username = ?, updated_at = ?
-            WHERE id = ?
-          `)
-          .bind(
-            updated.caption,
-            updated.thumbnail_url,
-            updated.status,
-            updated.drive_file_id,
-            updated.drive_file_url,
-            updated.youtube_video_id,
-            updated.youtube_video_url,
-            updated.encrypted_youtube_upload_session_uri || null,
-            updated.error_details,
-            updated.retry_count,
-            updated.completed_at,
-            updated.account_username,
-            now,
-            id
-          )
-          .run();
+        try {
+          // Fallback for pre-0005 (0004) schemas
+          await d1
+            .prepare(`
+              UPDATE upload_jobs
+              SET caption = ?, thumbnail_url = ?, status = ?, drive_file_id = ?,
+                  drive_file_url = ?, youtube_video_id = ?, youtube_video_url = ?,
+                  encrypted_youtube_upload_session_uri = ?, error_details = ?, retry_count = ?,
+                  completed_at = ?, account_username = ?, media_source_type = ?,
+                  rights_confirmed = ?, resolved_provider = ?, media_duration_seconds = ?,
+                  media_size_bytes = ?, youtube_privacy_status = ?, stage_retries_json = ?,
+                  updated_at = ?
+              WHERE id = ?
+            `)
+            .bind(
+              updated.caption,
+              updated.thumbnail_url,
+              updated.status,
+              updated.drive_file_id,
+              updated.drive_file_url,
+              updated.youtube_video_id,
+              updated.youtube_video_url,
+              updated.encrypted_youtube_upload_session_uri || null,
+              updated.error_details,
+              updated.retry_count,
+              updated.completed_at,
+              updated.account_username,
+              updated.media_source_type || 'PUBLIC_PROBE',
+              updated.rights_confirmed ? 1 : 0,
+              updated.resolved_provider ?? null,
+              updated.media_duration_seconds ?? null,
+              updated.media_size_bytes ?? null,
+              updated.youtube_privacy_status ?? null,
+              updated.stage_retries_json ?? null,
+              now,
+              id
+            )
+            .run();
+        } catch {
+          // Fallback for pre-0004 schemas
+          await d1
+            .prepare(`
+              UPDATE upload_jobs
+              SET caption = ?, thumbnail_url = ?, status = ?, drive_file_id = ?,
+                  drive_file_url = ?, youtube_video_id = ?, youtube_video_url = ?,
+                  encrypted_youtube_upload_session_uri = ?, error_details = ?, retry_count = ?,
+                  completed_at = ?, account_username = ?, updated_at = ?
+              WHERE id = ?
+            `)
+            .bind(
+              updated.caption,
+              updated.thumbnail_url,
+              updated.status,
+              updated.drive_file_id,
+              updated.drive_file_url,
+              updated.youtube_video_id,
+              updated.youtube_video_url,
+              updated.encrypted_youtube_upload_session_uri || null,
+              updated.error_details,
+              updated.retry_count,
+              updated.completed_at,
+              updated.account_username,
+              now,
+              id
+            )
+            .run();
+        }
       }
 
       return updated;

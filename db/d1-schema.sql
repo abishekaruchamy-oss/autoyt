@@ -77,6 +77,9 @@ CREATE TABLE IF NOT EXISTS upload_jobs (
     media_size_bytes INTEGER,
     youtube_privacy_status TEXT,
     stage_retries_json TEXT,
+    youtube_title TEXT,
+    youtube_description TEXT,
+    youtube_tags_json TEXT,
     status TEXT NOT NULL DEFAULT 'RECEIVED' CHECK (status IN (
         'RECEIVED', 'VALIDATING_URL', 'CHECKING_RIGHTS_POLICY', 'RESOLVING_CREATOR',
         'RESOLVING_MEDIA', 'VALIDATING_MEDIA', 'MEDIA_AVAILABLE',

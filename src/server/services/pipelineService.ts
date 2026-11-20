@@ -33,15 +33,15 @@ import {
 } from '../media/streamValidation';
 import { encryptToken, decryptToken } from '@/lib/crypto';
 import { formatBytes } from '@/lib/utils';
+import {
+  TopicMetadataService,
+  stripCreatorAttribution,
+  validateAndSanitizeYouTubeMetadata,
+} from '../metadata/TopicMetadataService';
 
-function buildAttributedCaption(rawCaption: string | undefined, username: string, shortcode: string): string {
-  const cleanUser = (username || 'creator').replace(/^@/, '').trim() || 'creator';
-  const base = (rawCaption || '').trim() || `Instagram Reel #${shortcode}`;
-  if (cleanUser === 'creator') return base;
-  if (base.toLowerCase().includes(`@${cleanUser.toLowerCase()}`)) {
-    return base;
-  }
-  return `${base} | Credit: @${cleanUser}`;
+function cleanCaptionText(rawCaption: string | undefined, shortcode: string): string {
+  const stripped = stripCreatorAttribution(rawCaption || '');
+  return stripped || `Instagram Reel #${shortcode}`;
 }
 
 export interface PipelineSyncOptions {
@@ -349,7 +349,18 @@ export class PipelineService {
     );
 
     // Step 2: YouTube Shorts Streaming Publication via authenticated Drive backup
-    await Repository.updateUploadJob(jobId, { status: 'UPLOADING_TO_YOUTUBE' });
+    await Repository.updateUploadJob(jobId, { status: 'PREPARING_YOUTUBE_METADATA' });
+    const generatedMeta = TopicMetadataService.generateMetadata({
+      rawCaption: reel.caption,
+      shortcode: reel.reel_id,
+    });
+    await Repository.updateUploadJob(jobId, {
+      youtube_title: generatedMeta.title,
+      youtube_description: generatedMeta.description,
+      youtube_tags_json: JSON.stringify(generatedMeta.tags),
+      status: 'UPLOADING_TO_YOUTUBE',
+      caption: generatedMeta.title,
+    });
 
     const driveStreamUrl = GoogleDriveService.getMediaDownloadUrl(driveResult.fileId);
     const driveHeaders = GoogleDriveService.getAuthHeaders(driveToken);
@@ -358,7 +369,10 @@ export class PipelineService {
       const ytResult = await YouTubeService.streamVideoToYouTube(
         driveStreamUrl,
         {
-          caption: reel.caption,
+          title: generatedMeta.title,
+          description: generatedMeta.description,
+          tags: generatedMeta.tags,
+          caption: generatedMeta.title,
           username,
           privacyStatus: defaultVisibility,
         },
@@ -561,9 +575,8 @@ export class PipelineService {
           resolution.username && resolution.username !== 'creator'
             ? resolution.username
             : authorUsername;
-        resolvedCaption = buildAttributedCaption(
+        resolvedCaption = cleanCaptionText(
           options?.captionOverride || resolution.caption || job.caption,
-          resolvedUsername,
           fileShortcode
         );
 
@@ -640,18 +653,57 @@ export class PipelineService {
 
       // 3. Prepare YouTube metadata & upload using authenticated Drive stream + session tracking
       await Repository.updateUploadJob(jobId, { status: 'PREPARING_YOUTUBE_METADATA' });
-      const finalCaption = buildAttributedCaption(resolvedCaption, resolvedUsername, fileShortcode);
+
+      // Reuse persisted metadata if available for idempotency and retry consistency
+      let targetTitle = job.youtube_title;
+      let targetDescription = job.youtube_description;
+      let targetTags: string[] = [];
+      if (job.youtube_tags_json) {
+        try {
+          targetTags = JSON.parse(job.youtube_tags_json);
+        } catch {
+          targetTags = [];
+        }
+      }
+
+      if (!targetTitle || !targetDescription) {
+        const generated = TopicMetadataService.generateMetadata({
+          rawCaption: options?.captionOverride || resolvedCaption,
+          shortcode: fileShortcode,
+          options: {
+            descriptionOverride: options?.captionOverride,
+          },
+        });
+        targetTitle = generated.title;
+        targetDescription = generated.description;
+        targetTags = generated.tags;
+
+        await Repository.updateUploadJob(jobId, {
+          youtube_title: targetTitle,
+          youtube_description: targetDescription,
+          youtube_tags_json: JSON.stringify(targetTags),
+        });
+      }
+
+      const validatedMeta = validateAndSanitizeYouTubeMetadata({
+        title: targetTitle,
+        description: targetDescription,
+        tags: targetTags,
+      });
 
       await Repository.updateUploadJob(jobId, {
         status: 'UPLOADING_TO_YOUTUBE',
-        caption: finalCaption,
+        caption: validatedMeta.title,
         account_username: resolvedUsername,
       });
 
       const ytResult = await YouTubeService.streamVideoToYouTube(
         videoSourceUrl,
         {
-          caption: finalCaption,
+          title: validatedMeta.title,
+          description: validatedMeta.description,
+          tags: validatedMeta.tags,
+          caption: validatedMeta.title,
           username: resolvedUsername,
           privacyStatus: targetVisibility,
         },
@@ -894,9 +946,8 @@ export class PipelineService {
       resolution.username && resolution.username !== 'creator'
         ? resolution.username
         : initialUsername;
-    const attributedCaption = buildAttributedCaption(
+    const cleanCaption = cleanCaptionText(
       payload.captionOverride || resolution.caption || job.caption,
-      resolvedUsername,
       shortcode
     );
 
@@ -904,7 +955,7 @@ export class PipelineService {
     await Repository.updateUploadJob(job.id, {
       status: 'VALIDATING_MEDIA',
       account_username: resolvedUsername,
-      caption: attributedCaption,
+      caption: cleanCaption,
       thumbnail_url: resolution.thumbnailUrl || job.thumbnail_url,
       resolved_provider: resolution.provider,
       media_duration_seconds: resolution.durationSeconds ?? null,
@@ -937,7 +988,7 @@ export class PipelineService {
     await Repository.updateUploadJob(job.id, {
       status: 'MEDIA_AVAILABLE',
       account_username: resolvedUsername,
-      caption: attributedCaption,
+      caption: cleanCaption,
       thumbnail_url: resolution.thumbnailUrl || job.thumbnail_url,
       resolved_provider: resolution.provider,
       media_source_type: payload.directVideoUrl ? 'USER_DIRECT_STREAM' : resolution.provider,
@@ -1047,7 +1098,28 @@ export class PipelineService {
 
       // Step B: Prepare YouTube Metadata & Upload directly from verified Google Drive archive
       await Repository.updateUploadJob(job.id, { status: 'PREPARING_YOUTUBE_METADATA' });
-      await Repository.updateUploadJob(job.id, { status: 'UPLOADING_TO_YOUTUBE' });
+
+      // Generate clean, topic-specific YouTube metadata (zero creator credit)
+      const generatedMeta = TopicMetadataService.generateMetadata({
+        rawCaption: cleanCaption,
+        shortcode,
+        options: {
+          descriptionOverride: payload.captionOverride,
+        },
+      });
+
+      const tagsJson = JSON.stringify(generatedMeta.tags);
+      await Repository.updateUploadJob(job.id, {
+        youtube_title: generatedMeta.title,
+        youtube_description: generatedMeta.description,
+        youtube_tags_json: tagsJson,
+      });
+
+      await Repository.updateUploadJob(job.id, {
+        status: 'UPLOADING_TO_YOUTUBE',
+        caption: generatedMeta.title,
+        account_username: resolvedUsername,
+      });
 
       const ytStreamUrl = GoogleDriveService.getMediaDownloadUrl(driveResult.fileId);
       const ytStreamHeaders = GoogleDriveService.getAuthHeaders(driveToken);
@@ -1055,7 +1127,10 @@ export class PipelineService {
       const ytResult = await YouTubeService.streamVideoToYouTube(
         ytStreamUrl,
         {
-          caption: attributedCaption,
+          title: generatedMeta.title,
+          description: generatedMeta.description,
+          tags: generatedMeta.tags,
+          caption: generatedMeta.title,
           username: resolvedUsername,
           privacyStatus: visibility,
         },

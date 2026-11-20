@@ -6,8 +6,10 @@ import {
 } from '../media/streamValidation';
 
 export interface YouTubeUploadMetadata {
-  caption: string;
-  username: string;
+  caption?: string;
+  username?: string;
+  title?: string;
+  description?: string;
   privacyStatus?: 'public' | 'unlisted' | 'private';
   tags?: string[];
   sizeBytes: number;
@@ -101,7 +103,26 @@ export class YouTubeService {
     metadata: YouTubeUploadMetadata,
     accessToken: string
   ): Promise<{ sessionUri: string; title: string; description: string }> {
-    const { title, description } = formatCaptionForYouTube(metadata.caption, metadata.username);
+    let title: string;
+    let description: string;
+
+    if (metadata.title && metadata.description) {
+      title = metadata.title;
+      description = metadata.description;
+    } else {
+      const formatted = formatCaptionForYouTube(metadata.caption || '', metadata.username);
+      title = metadata.title || formatted.title;
+      description = metadata.description || formatted.description;
+    }
+
+    // Ensure tags NEVER contain creator credit or username
+    const rawTags =
+      metadata.tags && metadata.tags.length > 0
+        ? metadata.tags
+        : ['Shorts', 'Facts', 'Viral'];
+    const safeTags = rawTags.filter(
+      (t) => !t.startsWith('@') && !t.toLowerCase().includes('credit')
+    );
 
     const initUrl =
       'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status';
@@ -110,7 +131,7 @@ export class YouTubeService {
       snippet: {
         title,
         description,
-        tags: metadata.tags || ['shorts', 'instagram', 'reels', metadata.username],
+        tags: safeTags,
         categoryId: '22', // People & Blogs
       },
       status: {
@@ -200,8 +221,11 @@ export class YouTubeService {
   static async streamVideoToYouTube(
     sourceVideoUrl: string,
     metadata: {
-      caption: string;
-      username: string;
+      caption?: string;
+      username?: string;
+      title?: string;
+      description?: string;
+      tags?: string[];
       privacyStatus?: 'public' | 'unlisted' | 'private';
     },
     accessToken: string,
@@ -219,13 +243,16 @@ export class YouTubeService {
 
     // 2. Obtain or initiate resumable upload session
     let sessionUri = options?.sessionUri;
-    let title = metadata.caption;
+    let title = metadata.title || metadata.caption || 'YouTube Short';
 
     if (!sessionUri) {
       const initiated = await this.initiateResumableUpload(
         {
+          title: metadata.title,
+          description: metadata.description,
           caption: metadata.caption,
           username: metadata.username,
+          tags: metadata.tags,
           privacyStatus: metadata.privacyStatus,
           sizeBytes: totalBytes,
         },

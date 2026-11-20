@@ -36,28 +36,20 @@ export function normalizeProfileUrl(input: string): { username: string; cleanUrl
   };
 }
 
+import { stripCreatorAttribution, cleanYouTubeTitle } from '../metadata/TopicMetadataService';
+
 /**
  * Formats Instagram caption for YouTube Shorts publishing according to strict rules:
- * - First line of caption becomes YouTube title (max 100 chars, ensuring #shorts is present)
- * - Full original caption becomes YouTube description
+ * - First line becomes clean YouTube title without creator-credit or @username handles
+ * - Clean caption becomes YouTube description without creator attribution footers
  */
-export function formatCaptionForYouTube(caption: string, username: string): {
+export function formatCaptionForYouTube(caption: string, _username?: string): {
   title: string;
   description: string;
 } {
-  const lines = caption.split('\n').map((l) => l.trim()).filter(Boolean);
-  let firstLine = lines.length > 0 ? lines[0] : 'Instagram Reel';
-
-  // Ensure title is <= 90 chars to allow "#shorts" suffix
-  if (firstLine.length > 85) {
-    firstLine = firstLine.substring(0, 85).trim() + '...';
-  }
-
-  // Ensure #shorts tag is present in title
-  const title = /#shorts/i.test(firstLine) ? firstLine : `${firstLine} #shorts`;
-
-  // Full description with source attribution
-  const description = `${caption}\n\n---\nOriginal source: Instagram @${username}\nPublished automatically via AutoShorts`;
+  const clean = stripCreatorAttribution(caption);
+  const title = cleanYouTubeTitle(clean);
+  const description = clean.trim() || 'Watch this video.';
 
   return { title, description };
 }
